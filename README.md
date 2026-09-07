@@ -2,7 +2,9 @@
 
 Reconstrucción del proyecto sobre Vite, con voz real (antes no existía),
 tratamiento visual híbrido (3D en vivo + siluetas) y texto en Reina-Valera
-1909 (dominio público, antes era RVR1960).
+1960, usado con el permiso general de Sociedades Bíblicas Unidas (ver
+`src/data/scripture.js` para el detalle de esa licencia y por qué esta
+perícopa sí califica sin pedir autorización escrita).
 
 ## ⚠️ Antes de nada: esto no se ha probado en un navegador real
 
