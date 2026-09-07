@@ -12,7 +12,11 @@
 import { AmbientAudioEngine } from '../audio/AudioEngine.js';
 import { VoiceEngine } from '../audio/VoiceEngine.js';
 import { Scene3D } from '../scene/Scene3D.js';
-import { SCRIPTURE_PERICOPE, SCRIPTURE_REFERENCE } from '../data/scripture.js';
+import {
+  SCRIPTURE_PERICOPE,
+  SCRIPTURE_REFERENCE,
+  SCRIPTURE_ATTRIBUTION,
+} from '../data/scripture.js';
 
 export class AppController {
   constructor() {
@@ -31,6 +35,12 @@ export class AppController {
     this.playIcon = document.getElementById('play-icon');
     this.radarCanvas = document.getElementById('radar-canvas');
     this.radarCtx = this.radarCanvas ? this.radarCanvas.getContext('2d') : null;
+
+    // El aviso de derechos es obligatorio para poder usar RVR1960 sin
+    // pedir permiso escrito (ver comentario en src/data/scripture.js) —
+    // no es decorativo, se muestra siempre, no solo mientras se reproduce.
+    const attributionEl = document.getElementById('scripture-attribution');
+    if (attributionEl) attributionEl.textContent = SCRIPTURE_ATTRIBUTION;
 
     this._renderScriptureShell();
     this._wireVoiceEvents();
