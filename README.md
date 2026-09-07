@@ -90,3 +90,10 @@ src/app/AppController.js  — conecta todo + UI
 - Fase de accesibilidad real (aria-live, navegación por teclado) — quedó
   fuera de este alcance, a decidir si se retoma
 - Revisar si conviene ajustar el ritmo/voz de la narración una vez la oigas
+
+## Pendiente (ver el documento maestro de contexto para el detalle completo)
+
+- Confirmar en navegador todo lo de la lista de arriba
+- Fase de accesibilidad real (aria-live, navegación por teclado) — quedó
+  fuera de este alcance, a decidir si se retoma
+- Revisar si conviene ajustar el ritmo/voz de la narración una vez la oigas
