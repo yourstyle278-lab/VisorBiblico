@@ -5,10 +5,14 @@
 // que mezclarlas en la misma clase no tendría sentido (ver DCM, 6.1).
 //
 // ESTADO: portado del HTML original de Fase 3 (esa parte ya se había
-// probado y funcionaba: viento, oleaje y dron sí sonaban). Lo nuevo aquí
-// es setStage() en vez de umbrales de tiempo fijos, y setDucking(), que
-// nunca se había podido probar porque nunca hubo voz real. Pendiente de
-// confirmar con `npm run dev` que sigue sonando igual que antes.
+// probado y funcionaba: viento, oleaje y dron sí sonaban). setStage() en
+// vez de umbrales de tiempo fijos, y setDucking(), se agregaron en Turno 3.
+//
+// CAMBIO TURNO 7 (ruta: src/audio/AudioEngine.js):
+// - setDucking(): el nivel al que baja el ambiente pasó de 0.35 a 0.8
+//   (mucho más leve). AppController ahora solo lo llama durante la etapa
+//   "command" — antes se llamaba en todo versículo y apagaba la
+//   sensación de tormenta peligrosa casi de inmediato.
 
 export class AmbientAudioEngine {
   constructor() {
@@ -182,11 +186,11 @@ export class AmbientAudioEngine {
   }
 
   // Baja el ambiente mientras se narra, para que la voz se entienda.
-  // Es el "ducking" que aparecía en el historial del proyecto desde el
-  // principio pero nunca se había podido probar, porque nunca hubo voz.
+  // Turno 7: bajado de 0.35 a 0.8 (más leve) — AppController ahora solo
+  // llama esto durante la etapa "command", no en todo versículo.
   setDucking(isNarrating) {
     if (!this.ambientGain || !this.ctx) return;
-    const target = isNarrating ? 0.35 : 1.0;
+    const target = isNarrating ? 0.8 : 1.0;
     this.ambientGain.gain.setTargetAtTime(target, this.ctx.currentTime, 0.3);
   }
 
