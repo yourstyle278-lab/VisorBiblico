@@ -8,6 +8,18 @@
 // eso dejó de tener sentido porque la Web Speech API no permite buscar
 // (seek) dentro de una locución. Por eso el transporte ahora es por
 // versículo (anterior/siguiente), no por tiempo.
+//
+// CAMBIOS TURNO 7 (ruta: src/app/AppController.js):
+// - Arreglado pausar/reanudar: no dependía de pause()/resume() de
+//   speechSynthesis (rotos en Android) — ahora reinicia el versículo
+//   actual en vez de intentar reanudar a medias.
+// - Trueno/rayo: estaban sin usar (huérfanos desde el rediseño del
+//   reloj) — ahora se disparan al entrar a la etapa storm-peak, y se
+//   repiten cada 4-7s mientras dure.
+// - Ducking: antes se aplicaba en todo versículo — ahora solo en la
+//   etapa "command" (ver también src/audio/AudioEngine.js).
+// - Se quitó _markVerseFullyHighlighted: el resaltado por palabra
+//   estimado (nuevo, en src/audio/VoiceEngine.js) lo reemplaza.
 
 import { AmbientAudioEngine } from '../audio/AudioEngine.js';
 import { VoiceEngine } from '../audio/VoiceEngine.js';
@@ -91,39 +103,69 @@ export class AppController {
       this._escape(after);
   }
 
-  // Si el navegador no manda 'boundary' por palabra, resalta el
-  // versículo completo — mejor eso que dejar el texto sin ninguna señal.
-  _markVerseFullyHighlighted(verseIndex) {
-    const entry = this.verseElements[verseIndex];
-    if (!entry) return;
-    entry.textSpan.innerHTML =
-      '<span class="word-active">' + this._escape(entry.raw) + '</span>';
+  // Dispara rayo + trueno. Antes de este arreglo, existían las funciones
+  // pero nada las llamaba (se quitó el disparo por tiempo fijo al pasar
+  // a un reloj basado en la voz, y nunca se puso un reemplazo).
+  _strikeLightning() {
+    this.scene3D.triggerLightning();
+    this.ambient.triggerThunder();
+  }
+
+  // Repite el rayo/trueno cada 4-7s mientras dure la tormenta más fuerte.
+  _startLightningLoop() {
+    this._stopLightningLoop();
+    const scheduleNext = () => {
+      const delayMs = 4000 + Math.random() * 3000;
+      this._lightningTimer = setTimeout(() => {
+        if (this.currentStage === 'storm-peak') {
+          this._strikeLightning();
+          scheduleNext();
+        }
+      }, delayMs);
+    };
+    scheduleNext();
+  }
+
+  _stopLightningLoop() {
+    if (this._lightningTimer) {
+      clearTimeout(this._lightningTimer);
+      this._lightningTimer = null;
+    }
+  }
+
+  // Antes: setDucking(true) se llamaba en TODO versículo sin condición,
+  // así que el ambiente bajaba casi al instante y la tormenta nunca se
+  // sentía "peligrosa". Ahora solo se atenúa (y poco: ver AudioEngine.js)
+  // durante la etapa "command", que es donde más importa oír con
+  // claridad "Calla, enmudece".
+  _applyDucking(stage) {
+    this.ambient.setDucking(stage === 'command');
   }
 
   _wireVoiceEvents() {
     this.voice.onVerseStart = (index) => {
       this.currentVerseIndex = index;
       const stage = SCRIPTURE_PERICOPE[index].stage;
+      const enteringStormPeak = stage === 'storm-peak' && this.currentStage !== 'storm-peak';
       this.currentStage = stage;
       this.ambient.setStage(stage);
-      this.ambient.setDucking(true);
+      this._applyDucking(stage);
       this._updateStageLabel(stage);
       this._updateProgress();
       this.verseElements.forEach((e, i) => {
         e.container.style.opacity = i === index ? '1' : '0.5';
       });
+
+      if (enteringStormPeak) {
+        this._strikeLightning();
+        this._startLightningLoop();
+      } else if (stage !== 'storm-peak') {
+        this._stopLightningLoop();
+      }
     };
 
     this.voice.onWordBoundary = (index, charIndex) => {
       this._highlightAtCharIndex(index, charIndex);
-    };
-
-    this.voice.onBoundaryUnavailable = (index) => {
-      this._markVerseFullyHighlighted(index);
-    };
-
-    this.voice.onVerseEnd = () => {
-      this.ambient.setDucking(false);
     };
 
     this.voice.onSequenceEnd = () => {
@@ -199,10 +241,15 @@ export class AppController {
 
     if (!this.voice.supported) {
       console.warn('Este navegador no soporta la Web Speech API (speechSynthesis).');
-    } else if (this.voice.synth.paused) {
-      this.voice.resume();
-    } else if (this.currentVerseIndex < 0) {
-      this.voice.speakSequence(SCRIPTURE_PERICOPE, 0);
+    } else {
+      // pause()/resume() de speechSynthesis están rotos en Chrome/Android
+      // (confirmado: Chromium bug #4500 — "pausing just causes the
+      // utterance to end, resume is a no-op"; se reproduce igual en
+      // Samsung Browser por compartir motor). Por eso, en vez de
+      // resume(), se vuelve a narrar desde el INICIO del versículo donde
+      // se quedó — unos segundos de un solo versículo, no de todo.
+      const resumeIndex = this.currentVerseIndex >= 0 ? this.currentVerseIndex : 0;
+      this.voice.speakSequence(SCRIPTURE_PERICOPE, resumeIndex);
     }
 
     this._startAnimLoop();
@@ -210,7 +257,11 @@ export class AppController {
 
   pause() {
     this.ambient.pause();
-    this.voice.pause();
+    // stop() (cancel) en vez de pause() — mismo motivo que en play():
+    // pause() no es confiable en Android. currentVerseIndex ya se guardó
+    // en onVerseStart, así que play() sabe por dónde retomar.
+    this.voice.stop();
+    this._stopLightningLoop();
     this.isPlaying = false;
     this._setPlayIcon(false);
     if (this.rafId) {
