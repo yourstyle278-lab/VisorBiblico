@@ -1,21 +1,16 @@
-// Scene3D.js — Escena 3D con enfoque HÍBRIDO (la opción que elegiste):
-// se conserva el océano y la cámara en vivo del archivo original (esa
-// parte ya funcionaba bien), y se cambia el TRATAMIENTO VISUAL de la
-// barca y las figuras a siluetas planas oscuras con un fondo que se
-// ilumina en tonos cálidos en la calma — para acercarse al estilo de
-// teatro de sombras de tu idea original sin desechar el motor 3D que
-// ya estaba construido.
+// Scene3D.js — Escena 3D con enfoque HÍBRIDO: se conserva el océano y la
+// cámara en vivo del archivo original, con tratamiento de siluetas para
+// la barca y las figuras.
 //
-// Las figuras no tienen rostro ni rasgos — mismo criterio que ya estaba
-// en el historial del proyecto: la autoridad de Cristo se transmite por
-// postura y luz, no por facciones especulativas.
-//
-// ESTADO: la simulación de oleaje, partículas de lluvia y rayo es la
-// misma lógica que ya venía funcionando. El tratamiento de siluetas y el
-// cambio de paleta storm/calm son nuevos: escritos con cuidado, pero sin
-// poder verlos renderizados de verdad desde este chat (no hay pantalla
-// ni navegador en este entorno). Es la parte que más vale la pena mirar
-// primero al probar `npm run dev`.
+// CAMBIO TURNO 7 (ruta: src/scene/Scene3D.js):
+// - La luz de fondo durante la tormenta estaba en 0 (el usuario reportó
+//   "no veo mayor claridad" — confirmado en el código). Un teatro de
+//   sombras necesita algo de luz detrás de las siluetas siempre. Ahora:
+//   tormenta = luz tenue y fría (antes 0), mandato = luz media, calma =
+//   luz fuerte y cálida (sin cambios). También se subió la luz ambiental
+//   general. Esto NO toca el diseño de las siluetas en sí (geometría 3D
+//   genérica) — ese rediseño a formas planas ilustradas sigue pendiente
+//   de que confirmes que quieres ir por ahí (ver DCM sección 5.2).
 
 import * as THREE from 'three';
 
@@ -48,7 +43,7 @@ export class Scene3D {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.container.appendChild(this.renderer.domElement);
 
-    this.ambientLight = new THREE.AmbientLight(PALETTE.storm.ambient, 1.2);
+    this.ambientLight = new THREE.AmbientLight(PALETTE.storm.ambient, 1.8);
     this.scene.add(this.ambientLight);
 
     // Luz cálida detrás de la barca: crea el fondo iluminado contra el
@@ -185,7 +180,10 @@ export class Scene3D {
     this.oceanMesh.material.color.setHex(palette.sea);
     this.oceanMesh.material.wireframe = !isCalm;
     this.ambientLight.color.setHex(palette.ambient);
-    this.backLight.intensity = isCalm ? 6 : stage === 'command' ? 3 : 0;
+    // Turno 7: antes la tormenta se quedaba en 0 (negro casi total).
+    // Ahora mantiene algo de luz fría siempre, para que las siluetas se
+    // vean como tal en vez de manchas negras en la nada.
+    this.backLight.intensity = isCalm ? 6 : stage === 'command' ? 4 : 1.5;
 
     this.renderer.render(this.scene, this.camera);
   }
