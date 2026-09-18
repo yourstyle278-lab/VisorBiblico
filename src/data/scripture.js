@@ -38,30 +38,42 @@ export const SCRIPTURE_ATTRIBUTION =
   'marca registrada de Sociedades Bíblicas Unidas, y se puede usar ' +
   'solamente bajo licencia.';
 
+// CAMBIO TURNO 11 (ruta: src/data/scripture.js): se agregó el campo
+// "exegesis" a cada versículo — pedido explícito del usuario tras ver el
+// panel "Exégesis Teológica Visual y Acústica" de los ejemplos de Gemini.
+// Es texto propio, no tomado de Gemini ni de ninguna fuente externa: una
+// frase breve por versículo, ceñida a lo que el texto mismo narra, sin
+// añadir interpretación especulativa (mismo criterio que ya rige toda
+// la app). Rol 📜 Contenido Bíblico/Teológico.
 export const SCRIPTURE_PERICOPE = [
   {
     verse: 35,
     text: 'Aquel día, cuando llegó la noche, les dijo: Pasemos al otro lado.',
     stage: 'storm-building',
+    exegesis: 'Jesús decide cruzar al otro lado del lago; la travesía comienza sin ninguna señal todavía de la prueba que se acerca.',
   },
   {
     verse: 37,
     text: 'Pero se levantó una gran tempestad de viento, y echaba las olas en la barca, de tal manera que ya se anegaba.',
     stage: 'storm-peak',
+    exegesis: 'La tempestad se levanta de repente sobre el lago de Galilea, y las olas comienzan a entrar en la barca.',
   },
   {
     verse: 38,
     text: 'Y él estaba en la popa, durmiendo sobre un cabezal; y le despertaron, y le dijeron: Maestro, ¿no tienes cuidado que perecemos?',
     stage: 'storm-peak',
+    exegesis: 'En medio del peligro, Jesús duerme en la popa; sus discípulos, temiendo perecer, lo despiertan.',
   },
   {
     verse: 39,
     text: 'Y levantándose, reprendió al viento, y dijo al mar: Calla, enmudece. Y cesó el viento, y se hizo grande bonanza.',
     stage: 'command',
+    exegesis: 'Una sola palabra suya basta: "Calla, enmudece." El viento cesa y sobreviene una grande bonanza.',
   },
   {
     verse: 41,
     text: 'Entonces temieron con gran temor, y se decían el uno al otro: ¿Quién es éste, que aun el viento y el mar le obedecen?',
     stage: 'calm',
+    exegesis: 'Sobrecogidos, los discípulos se preguntan entre sí quién es este a quien hasta el viento y el mar obedecen.',
   },
 ];
