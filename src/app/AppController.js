@@ -9,17 +9,26 @@
 // (seek) dentro de una locución. Por eso el transporte ahora es por
 // versículo (anterior/siguiente), no por tiempo.
 //
-// CAMBIOS TURNO 7 (ruta: src/app/AppController.js):
-// - Arreglado pausar/reanudar: no dependía de pause()/resume() de
-//   speechSynthesis (rotos en Android) — ahora reinicia el versículo
-//   actual en vez de intentar reanudar a medias.
-// - Trueno/rayo: estaban sin usar (huérfanos desde el rediseño del
-//   reloj) — ahora se disparan al entrar a la etapa storm-peak, y se
-//   repiten cada 4-7s mientras dure.
-// - Ducking: antes se aplicaba en todo versículo — ahora solo en la
-//   etapa "command" (ver también src/audio/AudioEngine.js).
-// - Se quitó _markVerseFullyHighlighted: el resaltado por palabra
-//   estimado (nuevo, en src/audio/VoiceEngine.js) lo reemplaza.
+// CAMBIOS TURNO 11 (ruta: src/app/AppController.js) — a partir de tu
+// prueba real del Turno 10:
+// - ARREGLADO: "cuando se para y se reproduce de nuevo empieza desde el
+//   principio". La causa real: _startAnimLoop() hacía
+//   `const start = performance.now()` CADA VEZ que se llamaba —
+//   incluida cada reanudación — así que el reloj que alimenta las olas,
+//   el balanceo de la barca y ahora las transiciones de Scene3D volvía a
+//   0 en cada play(). El versículo/voz SÍ retomaba bien (eso ya estaba
+//   arreglado desde el Turno 8); lo que saltaba era la animación 3D.
+//   Ahora el tiempo transcurrido se acumula en _elapsedAtPause y sigue
+//   sumando donde se quedó, en vez de reiniciar.
+// - QUITADO: el panel "Radar de sonido espacial" completo (era un
+//   indicador fijo, no interactivo — pedido explícito del usuario).
+//   Con esto desaparecen radarCanvas/radarCtx/_drawRadar().
+// - CAMBIADO: el panel de la Biblia ya no muestra los 5 versículos en
+//   una caja con scroll — ahora muestra SOLO el versículo que se está
+//   narrando en este momento (pedido explícito del Turno 9), reemplazado
+//   por completo cada vez que empieza un versículo nuevo.
+// - NUEVO: conecta el panel de reflexión ("exégesis") con el texto de
+//   cada versículo (ver src/data/scripture.js).
 
 import { AmbientAudioEngine } from '../audio/AudioEngine.js';
 import { VoiceEngine } from '../audio/VoiceEngine.js';
@@ -40,13 +49,16 @@ export class AppController {
     this.currentStage = 'storm-building';
     this.isPlaying = false;
     this.rafId = null;
+    // Tiempo acumulado del reloj de animación hasta la última pausa —
+    // ver comentario de cabecera. Empieza en 0 al cargar la app.
+    this._elapsedAtPause = 0;
+    this._currentElapsed = 0;
 
     this.scriptureEl = document.getElementById('scripture-container');
     this.stageLabelEl = document.getElementById('scene-state-text');
     this.progressEl = document.getElementById('timeline-progress');
     this.playIcon = document.getElementById('play-icon');
-    this.radarCanvas = document.getElementById('radar-canvas');
-    this.radarCtx = this.radarCanvas ? this.radarCanvas.getContext('2d') : null;
+    this.exegesisEl = document.getElementById('exegesis-text');
 
     // El aviso de derechos es obligatorio para poder usar RVR1960 sin
     // pedir permiso escrito (ver comentario en src/data/scripture.js) —
@@ -54,31 +66,37 @@ export class AppController {
     const attributionEl = document.getElementById('scripture-attribution');
     if (attributionEl) attributionEl.textContent = SCRIPTURE_ATTRIBUTION;
 
-    this._renderScriptureShell();
     this._wireVoiceEvents();
     this._wireControls();
   }
 
-  _renderScriptureShell() {
+  // Reemplaza TODO el contenido del panel por el versículo `index` — ya
+  // no se arma una lista con los 5 versículos de una vez (ver cabecera).
+  _showVerse(index) {
+    const v = SCRIPTURE_PERICOPE[index];
+    if (!v || !this.scriptureEl) return;
     this.scriptureEl.innerHTML = '';
+
     const refEl = document.createElement('p');
     refEl.className = 'text-xs text-slate-500 mb-2';
     refEl.textContent = SCRIPTURE_REFERENCE;
-    this.scriptureEl.appendChild(refEl);
 
-    this.verseElements = SCRIPTURE_PERICOPE.map((v) => {
-      const verseDiv = document.createElement('div');
-      verseDiv.className = 'verse-block text-slate-400 mb-3 transition-opacity';
-      const num = document.createElement('span');
-      num.className = 'text-xs font-bold text-amber-500 font-mono mr-2 select-none';
-      num.textContent = `v.${v.verse}`;
-      const textSpan = document.createElement('span');
-      textSpan.textContent = v.text;
-      verseDiv.appendChild(num);
-      verseDiv.appendChild(textSpan);
-      this.scriptureEl.appendChild(verseDiv);
-      return { container: verseDiv, textSpan, raw: v.text };
-    });
+    const verseP = document.createElement('p');
+    const num = document.createElement('span');
+    num.className = 'text-xs font-bold text-amber-500 font-mono mr-2 select-none align-top';
+    num.textContent = `v.${v.verse}`;
+    const textSpan = document.createElement('span');
+    textSpan.textContent = v.text;
+    verseP.appendChild(num);
+    verseP.appendChild(textSpan);
+
+    this.scriptureEl.appendChild(refEl);
+    this.scriptureEl.appendChild(verseP);
+
+    this._currentVerseSpan = textSpan;
+    this._currentVerseRaw = v.text;
+
+    if (this.exegesisEl) this.exegesisEl.textContent = v.exegesis || '';
   }
 
   _escape(str) {
@@ -88,16 +106,17 @@ export class AppController {
   }
 
   // Resalta la palabra activa usando el charIndex real que entrega el
-  // evento 'boundary' del navegador (cuando está disponible).
+  // evento 'boundary' del navegador (cuando está disponible). Como ahora
+  // solo se muestra un versículo a la vez, basta con comparar que el
+  // evento sea del versículo que está en pantalla.
   _highlightAtCharIndex(verseIndex, charIndex) {
-    const entry = this.verseElements[verseIndex];
-    if (!entry) return;
-    const text = entry.raw;
+    if (verseIndex !== this.currentVerseIndex || !this._currentVerseSpan) return;
+    const text = this._currentVerseRaw;
     const before = text.slice(0, charIndex);
     const wordMatch = text.slice(charIndex).match(/^\S+/);
     const word = wordMatch ? wordMatch[0] : '';
     const after = text.slice(charIndex + word.length);
-    entry.textSpan.innerHTML =
+    this._currentVerseSpan.innerHTML =
       this._escape(before) +
       '<span class="word-active">' + this._escape(word) + '</span>' +
       this._escape(after);
@@ -152,9 +171,7 @@ export class AppController {
       this._applyDucking(stage);
       this._updateStageLabel(stage);
       this._updateProgress();
-      this.verseElements.forEach((e, i) => {
-        e.container.style.opacity = i === index ? '1' : '0.5';
-      });
+      this._showVerse(index);
 
       if (enteringStormPeak) {
         this._strikeLightning();
@@ -264,6 +281,9 @@ export class AppController {
     this._stopLightningLoop();
     this.isPlaying = false;
     this._setPlayIcon(false);
+    // Guardar dónde se quedó el reloj de animación (ver cabecera) para
+    // que la próxima _startAnimLoop() continúe, no reinicie.
+    this._elapsedAtPause = this._currentElapsed;
     if (this.rafId) {
       cancelAnimationFrame(this.rafId);
       this.rafId = null;
@@ -277,13 +297,19 @@ export class AppController {
       : 'fa-solid fa-play text-xl ml-0.5';
   }
 
+  // ARREGLADO Turno 11: antes `const start = performance.now()` se
+  // recalculaba en cada llamada, así que `elapsed` volvía a 0 en cada
+  // play()/reanudación — eso era lo que se veía como "empieza desde el
+  // principio" (las olas y el balanceo de la barca, no la voz). Ahora
+  // arranca desde _elapsedAtPause y sigue sumando desde ahí.
   _startAnimLoop() {
-    const start = performance.now();
+    const loopStart = performance.now();
+    const baseElapsed = this._elapsedAtPause;
     const loop = (now) => {
-      const elapsed = (now - start) / 1000;
+      const elapsed = baseElapsed + (now - loopStart) / 1000;
+      this._currentElapsed = elapsed;
       this.ambient.updateWindOrbit(elapsed);
       this.scene3D.render(elapsed, this.currentStage);
-      this._drawRadar(elapsed);
       if (this.isPlaying) {
         this.rafId = requestAnimationFrame(loop);
       } else {
@@ -291,29 +317,5 @@ export class AppController {
       }
     };
     this.rafId = requestAnimationFrame(loop);
-  }
-
-  _drawRadar(elapsed) {
-    if (!this.radarCtx) return;
-    const w = this.radarCanvas.width;
-    const h = this.radarCanvas.height;
-    const cx = w / 2;
-    const cy = h / 2;
-    this.radarCtx.clearRect(0, 0, w, h);
-    this.radarCtx.strokeStyle = 'rgba(51, 65, 85, 0.6)';
-    this.radarCtx.beginPath();
-    this.radarCtx.arc(cx, cy, 20, 0, Math.PI * 2);
-    this.radarCtx.arc(cx, cy, 45, 0, Math.PI * 2);
-    this.radarCtx.stroke();
-
-    // Solo el viento está espacializado de verdad, por eso es el único
-    // punto que se dibuja. Antes había un punto fijo etiquetado "voz de
-    // Jesús" sin ningún audio real detrás — se quitó (ver DCM, hallazgo 6).
-    const windX = cx + Math.sin(elapsed * 0.5) * 40;
-    const windY = cy + Math.cos(elapsed * 0.5) * 40;
-    this.radarCtx.fillStyle = '#38bdf8';
-    this.radarCtx.beginPath();
-    this.radarCtx.arc(windX, windY, 4, 0, Math.PI * 2);
-    this.radarCtx.fill();
   }
 }
