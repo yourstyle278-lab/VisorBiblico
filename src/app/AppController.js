@@ -29,6 +29,34 @@
 //   por completo cada vez que empieza un versículo nuevo.
 // - NUEVO: conecta el panel de reflexión ("exégesis") con el texto de
 //   cada versículo (ver src/data/scripture.js).
+//
+// CAMBIOS TURNO 12 (a partir de "realmente no veo mucho cambio" y el
+// "efecto rebobinar" reportado):
+// - DIAGNÓSTICO CON EVIDENCIA: se releyó _elapsedAtPause/_startAnimLoop
+//   línea por línea — SÍ funciona como se documentó, ese reloj no
+//   reinicia. El "empieza desde el principio" no es ese reloj: la causa
+//   confirmada por código está en Scene3D, que suaviza CUALQUIER cambio
+//   de etapa, incluido volver de "calm" a "storm-building" al reiniciar
+//   la secuencia — esa interpolación de regreso se ve exactamente como
+//   "rebobinar". Arreglado abajo, en onVerseStart.
+// - NUEVO: _lastNarratedIndex. Cada vez que empieza un versículo, se
+//   compara contra el último narrado: si es "el mismo" (se repite por
+//   la pausa) o "el siguiente natural" (avance normal de la historia),
+//   la transición sigue siendo suave. Cualquier otro salto (reinicio
+//   tras el final, o los botones anterior/siguiente cruzando hacia
+//   atrás) llama a scene3D.snapToStage(stage) para un corte instantáneo.
+// - PREVENTIVO, sin confirmar todavía: se agregó una bandera
+//   (_manualStop) para que un pause() (que llama a voice.stop()) no
+//   pueda disparar accidentalmente onSequenceEnd si el motor de voz
+//   emite su evento de "fin" al cancelar — eso SÍ explicaría un reinicio
+//   real a currentVerseIndex = -1 en cada pausa, no solo el efecto
+//   visual ya diagnosticado arriba. No se pudo confirmar ni descartar
+//   con evidencia real porque VoiceEngine.js no se incluyó en los
+//   archivos de este turno — pedido para el próximo turno.
+// - Cámara y cielo (ver src/scene/Scene3D.js): sin cambios en ESTE
+//   archivo, pero afectan lo que ves — Scene3D ahora ata el color del
+//   cielo a la niebla y bajó un poco la mirada de la cámara, por el
+//   reclamo de "todo oscuro".
 
 import { AmbientAudioEngine } from '../audio/AudioEngine.js';
 import { VoiceEngine } from '../audio/VoiceEngine.js';
@@ -53,6 +81,10 @@ export class AppController {
     // ver comentario de cabecera. Empieza en 0 al cargar la app.
     this._elapsedAtPause = 0;
     this._currentElapsed = 0;
+    // Último índice de versículo narrado — para que onVerseStart pueda
+    // distinguir avance natural de un salto que necesita corte duro en
+    // Scene3D (ver cabecera, Turno 12). -1 = todavía no narró nada.
+    this._lastNarratedIndex = -1;
 
     this.scriptureEl = document.getElementById('scripture-container');
     this.stageLabelEl = document.getElementById('scene-state-text');
@@ -163,8 +195,18 @@ export class AppController {
 
   _wireVoiceEvents() {
     this.voice.onVerseStart = (index) => {
-      this.currentVerseIndex = index;
       const stage = SCRIPTURE_PERICOPE[index].stage;
+      // ¿Es "el mismo versículo de nuevo" (se repite por la pausa) o "el
+      // siguiente natural" de la historia? Si no es ninguno de los dos,
+      // es un salto (reinicio tras el final, o botón anterior/siguiente
+      // cruzando hacia atrás) y la escena necesita un corte, no una
+      // transición — ver Turno 12 arriba y en Scene3D.js.
+      const isContinuation =
+        index === this._lastNarratedIndex || index === this._lastNarratedIndex + 1;
+      if (!isContinuation) this.scene3D.snapToStage(stage);
+      this._lastNarratedIndex = index;
+
+      this.currentVerseIndex = index;
       const enteringStormPeak = stage === 'storm-peak' && this.currentStage !== 'storm-peak';
       this.currentStage = stage;
       this.ambient.setStage(stage);
@@ -186,6 +228,13 @@ export class AppController {
     };
 
     this.voice.onSequenceEnd = () => {
+      if (this._manualStop) {
+        // Este "fin" llegó por nuestro propio stop() dentro de pause(),
+        // no porque de verdad se acabó la perícopa — ver pause() y la
+        // cabecera (Turno 12, preventivo sin confirmar).
+        this._manualStop = false;
+        return;
+      }
       this.pause();
       this.currentVerseIndex = -1;
     };
@@ -274,6 +323,15 @@ export class AppController {
 
   pause() {
     this.ambient.pause();
+    // PREVENTIVO (Turno 12, sin confirmar todavía — ver cabecera): si el
+    // motor de voz dispara su evento de "fin de secuencia" como reacción
+    // a este stop() (en vez de solo al terminar el último versículo de
+    // verdad), esta bandera hace que onSequenceEnd lo ignore, para que
+    // una pausa cualquiera no reinicie currentVerseIndex a -1. Se limpia
+    // sola en 300ms si no llegó ningún evento, para no tapar un fin de
+    // secuencia real más adelante.
+    this._manualStop = true;
+    setTimeout(() => { this._manualStop = false; }, 300);
     // stop() (cancel) en vez de pause() — mismo motivo que en play():
     // pause() no es confiable en Android. currentVerseIndex ya se guardó
     // en onVerseStart, así que play() sabe por dónde retomar.
