@@ -2,48 +2,51 @@
 // luces) + siluetas planas tipo "recorte de papel" para la barca y las
 // figuras (teatro de sombras), en vez de geometría 3D genérica.
 //
-// CAMBIO TURNO 10 (ruta: src/scene/Scene3D.js) — pedido explícito del
-// usuario después de revisar el Turno 9:
-// 1) Las siluetas deben leerse como personajes reales, no conos/cápsulas.
-//    Se reconstruyeron como formas 2D planas (THREE.Shape: túnica con
-//    contorno que se angosta hacia los hombros + cabeza + brazo opcional)
-//    en vez de primitivas 3D genéricas. Jesús tiene dos poses pre-
-//    construidas (dormido / de pie con el brazo en el gesto del mandato)
-//    que se alternan por visibilidad según la etapa — no se reconstruye
-//    geometría en cada cambio, así que es barato en cada frame.
-// 2) La barca debe leerse como barca, no como un cono. Nuevo casco: un
-//    perfil 2D (proa, fondo y popa curvos) extruido para dar manga
-//    (ancho) — ya no hace falta rotar un cono para simular un casco.
-// 3) El usuario corrigió expresamente la propuesta del Turno 9 de que el
-//    mar combinara con el tono cálido de la página: "quiero que sea
-//    color mar, no que combine con la página". Paleta de azules/
-//    turquesas independiente del resto de la interfaz, con degradado de
-//    color POR VÉRTICE según la altura de la ola (más claro en las
-//    crestas, más oscuro en los valles) en vez de un color plano. Se
-//    quitó el modo wireframe de la tormenta — una cuadrícula no se ve
-//    como mar real. El material sigue siendo MeshStandardMaterial (con
-//    luz), no se vuelve a un material plano sin luz.
-// 4) La lluvia debe verse como lluvia, "con sus colores": se cambió de
-//    puntos redondos cian saturado a segmentos alargados (streaks) de
-//    tono gris-azulado pálido y translúcido — se lee como gota cayendo,
-//    no como confeti.
+// CAMBIO TURNO 11 (ruta: src/scene/Scene3D.js) — a partir de tu prueba
+// real en el teléfono del Turno 10:
+// 1) "Falta iluminación y claridad para ver a las personas en la barca":
+//    las figuras usan MeshBasicMaterial (silueta pura, no reacciona a
+//    ninguna luz de la escena) — así que el problema NUNCA fue poca luz
+//    SOBRE ellas, sino poco contraste DETRÁS de ellas: en tormenta, el
+//    fondo (niebla + mar) era casi tan oscuro como la silueta misma. Se
+//    subió backLight de tormenta de 1.5 a un valor bastante más alto
+//    (target ~3.2) — esa luz sí ilumina el mar (MeshStandardMaterial),
+//    creando un fondo más visible detrás de la barca sin tocar el color
+//    de la silueta ni volver a acercarse a los valores que causaron el
+//    destello del Turno 8.
+// 2) "No hay fluidez de movimiento como en las siluetas de Harry Potter":
+//    antes las figuras eran formas rígidas sin ninguna animación propia
+//    (solo el balanceo del grupo entero de la barca). Se agregó:
+//    - Una leve oscilación de "estar vivo" en Jesús de pie y en los 3
+//      discípulos (rotación sutil, con una fase distinta por figura para
+//      que no se muevan todos igual — eso se ve robótico).
+//    - Jesús ya NO cambia de dormido a de pie de un salto: hay una
+//      transición de ~2s con una coreografía en dos tiempos (primero se
+//      incorpora — mezcla de opacidad entre la figura dormida y la de
+//      pie —, y solo después extiende el brazo desde una posición de
+//      descanso hasta el gesto de mandato), más un pequeño ascenso en Y.
+// 3) "La gran bonanza no es parar en seco sino un movimiento de paz":
+//    antes, TODOS los valores dependientes de la etapa (amplitud/
+//    frecuencia de las olas, paleta de color del mar/niebla/ambiente,
+//    intensidad de la luz trasera) saltaban de golpe al cambiar de
+//    etapa. Ahora hay un solo mecanismo de suavizado (ease exponencial
+//    con base en el tiempo real transcurrido, no en el framerate) que
+//    se aplica a TODOS esos valores por igual — así que tanto que la
+//    tormenta se agrave como que amaine se sienten como un movimiento
+//    continuo, nunca como un corte.
 //
-// Interfaz pública SIN cambios (para no tocar AppController.js ni
-// index.html): constructor(containerEl), render(elapsedSeconds, stage),
-// triggerLightning().
+// Interfaz pública SIN cambios: constructor(containerEl),
+// render(elapsedSeconds, stage), triggerLightning().
 //
-// Nota de honestidad (mismo aviso que el resto del proyecto): esto se
-// escribió sin poder abrir un navegador real. Se verificó la sintaxis
-// (node --check) y se revisó cada forma a mano, pero no hay
-// confirmación visual todavía — trátalo como primera versión para
-// probar en tu teléfono, no como un hecho terminado. Las proporciones
-// exactas de las siluetas son lo primero que probablemente haya que
-// afinar una vez la veas correr.
+// Nota de honestidad: sigue sin haber confirmación en un navegador real
+// para ESTE cambio específico — se revisó a mano cada valor y cada
+// fórmula, y la sintaxis pasa node --check, pero las proporciones y
+// tiempos exactos (qué tan rápido se ve bien la subida del brazo, cuánto
+// contraste hace falta de verdad) solo se pueden afinar con la prueba en
+// tu teléfono. Trátalo como un paso adelante, no como algo cerrado.
 
 import * as THREE from 'three';
 
-// Paleta de mar independiente del tono de la página — a pedido expreso
-// del usuario, "color mar" real, no un mar que combine con el pergamino.
 const PALETTE = {
   storm: {
     fog: 0x0b1620,
@@ -62,10 +65,30 @@ const PALETTE = {
 const SILHOUETTE_COLOR = 0x03040a;
 const RAIN_COLOR = 0xaec6d1;
 
+// Cuánto tardan en "alcanzar" al valor objetivo los parámetros que se
+// suavizan (olas, colores, luz). Más alto = transición más lenta/pacífica.
+const TRANSITION_SECONDS = 2.2;
+// Cuánto tarda Jesús en pasar de dormido a de pie con el brazo extendido.
+const RISE_SECONDS = 2.0;
+// Fracción inicial de ese tiempo dedicada a "incorporarse" antes de que
+// el brazo empiece a moverse (coreografía en dos tiempos).
+const RISE_BEFORE_ARM = 0.4;
+
 export class Scene3D {
   constructor(containerEl) {
     this.container = containerEl;
     this._buildScene();
+
+    // --- Estado suavizado: se acerca al objetivo cada frame, no salta ---
+    this._curWaveAmp = 0.8;
+    this._curWaveFreq = 1.8;
+    this._curBackLight = 1.5;
+    this._curFog = new THREE.Color(PALETTE.storm.fog);
+    this._curAmbient = new THREE.Color(PALETTE.storm.ambient);
+    this._curDeep = new THREE.Color(PALETTE.storm.seaDeep);
+    this._curShallow = new THREE.Color(PALETTE.storm.seaShallow);
+    this._riseProgress = 0; // 0 = dormido, 1 = de pie y con el brazo en alto
+    this._lastElapsed = 0;
   }
 
   _buildScene() {
@@ -91,6 +114,8 @@ export class Scene3D {
 
     // Luz cálida detrás de la barca: crea el fondo iluminado contra el
     // que las siluetas oscuras se recortan (look de teatro de sombras).
+    // Es la ÚNICA fuente real de contraste para verlas, porque su propio
+    // material no reacciona a la luz (ver comentario de cabecera, punto 1).
     this.backLight = new THREE.PointLight(0xffd27a, 0, 60);
     this.backLight.position.set(0, 4, -8);
     this.scene.add(this.backLight);
@@ -107,9 +132,6 @@ export class Scene3D {
   }
 
   _buildOcean() {
-    // Mismo número de segmentos que antes (48x48) — el cambio está en la
-    // función de ola y en el color, no en la resolución de la malla, para
-    // no arriesgar el rendimiento ya probado en el teléfono del usuario.
     const geo = new THREE.PlaneGeometry(60, 60, 48, 48);
     const count = geo.attributes.position.count;
     geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
@@ -126,23 +148,29 @@ export class Scene3D {
 
   // --- Siluetas planas ("recorte de papel") ---------------------------
   // Construye una figura como forma 2D plana (túnica + cabeza + brazo
-  // opcional) en vez de primitivas 3D. Al quedar en el plano XY mirando
-  // a +Z, encara de frente a la cámara fija del proyecto sin necesidad
-  // de recalcular orientación cada frame (la cámara no orbita).
+  // opcional). Ahora el material siempre es transparent:true (aunque
+  // empiece en opacity 1) para poder desvanecer/aparecer figuras sin
+  // saltos — lo usa la transición de Jesús. armRestAngle es el ángulo de
+  // reposo del brazo; armTargetAngle es a dónde debe llegar cuando
+  // riseProgress = 1 (si la figura no anima el brazo, ambos son iguales).
   _makeRobedFigure({
     height = 1.0,
     hemWidth = 0.5,
     shoulderWidth = 0.24,
     headRadius = 0.13,
-    armAngle = null, // radianes; null = sin brazo levantado
+    armAngle = null,
+    armRestAngle = null,
     armLength = 0.55,
-    leanZ = 0, // inclinación hacia adelante/atrás
+    leanZ = 0,
   } = {}) {
     const group = new THREE.Group();
     const mat = new THREE.MeshBasicMaterial({
       color: SILHOUETTE_COLOR,
       side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 1,
     });
+    group.userData.mat = mat;
 
     const shoulderY = height * 0.78;
     const bodyShape = new THREE.Shape();
@@ -167,8 +195,11 @@ export class Scene3D {
       armShape.lineTo(-armW / 3, armLength);
       const arm = new THREE.Mesh(new THREE.ShapeGeometry(armShape), mat);
       arm.position.set(0, shoulderY * 0.92, 0.001);
-      arm.rotation.z = armAngle;
+      arm.rotation.z = armRestAngle !== null ? armRestAngle : armAngle;
       group.add(arm);
+      group.userData.arm = arm;
+      group.userData.armRestAngle = armRestAngle !== null ? armRestAngle : armAngle;
+      group.userData.armTargetAngle = armAngle;
     }
 
     if (leanZ) group.rotation.x = leanZ;
@@ -182,10 +213,7 @@ export class Scene3D {
       side: THREE.DoubleSide,
     });
 
-    // --- Casco: perfil 2D extruido, ya no un cono ---
-    // Perfil dibujado en el plano X (eslora) / Y (altura); se extruye en
-    // Z para dar la manga del casco — así no hace falta rotar la forma
-    // para "acostarla" como pasaba con el cono anterior.
+    // --- Casco: perfil 2D extruido ---
     const hullProfile = new THREE.Shape();
     hullProfile.moveTo(-1.7, 0.55);
     hullProfile.quadraticCurveTo(-2.0, 0.15, -1.55, -0.4);
@@ -194,7 +222,7 @@ export class Scene3D {
     hullProfile.quadraticCurveTo(2.0, 0.4, 1.65, 0.55);
     hullProfile.lineTo(-1.7, 0.55);
     const hullGeo = new THREE.ExtrudeGeometry(hullProfile, { depth: 1.5, bevelEnabled: false });
-    hullGeo.translate(0, 0, -0.75); // centrar la manga en Z
+    hullGeo.translate(0, 0, -0.75);
     const hull = new THREE.Mesh(hullGeo, silhouetteMat);
     this.boatGroup.add(hull);
 
@@ -202,30 +230,33 @@ export class Scene3D {
     mast.position.set(-0.2, 1.85, 0);
     this.boatGroup.add(mast);
 
-    // --- Jesús: dos poses pre-construidas; se alterna visibilidad en
-    // render() según la etapa, nunca se reconstruye geometría ---
+    // --- Jesús: dos poses; la transición entre ellas se anima en
+    // render() a través de _riseProgress, no es un salto de visibilidad ---
     this.jesusSleeping = this._makeRobedFigure({
       height: 0.75,
       hemWidth: 0.62,
       shoulderWidth: 0.3,
       headRadius: 0.13,
     });
-    this.jesusSleeping.rotation.z = Math.PI / 2; // recostado a lo largo de la barca
+    this.jesusSleeping.rotation.z = Math.PI / 2;
     this.jesusSleeping.position.set(0.9, 0.42, 0);
     this.boatGroup.add(this.jesusSleeping);
 
+    // armRestAngle: el brazo empieza casi pegado al cuerpo (reposo, recién
+    // incorporado); armAngle (target): el gesto de mandato ya extendido.
     this.jesusStanding = this._makeRobedFigure({
       height: 1.35,
       hemWidth: 0.58,
       shoulderWidth: 0.26,
       headRadius: 0.14,
       armAngle: -Math.PI / 3.2,
+      armRestAngle: 0.12,
     });
-    this.jesusStanding.position.set(0.9, 0.5, 0);
-    this.jesusStanding.visible = false;
+    this._jesusStandingBaseY = 0.5;
+    this.jesusStanding.position.set(0.9, this._jesusStandingBaseY, 0);
     this.boatGroup.add(this.jesusStanding);
 
-    // --- Discípulos: 3 poses distintas entre sí, no copias idénticas ---
+    // --- Discípulos: 3 poses distintas entre sí ---
     this.discipleFigures = [
       this._makeRobedFigure({ height: 0.85, hemWidth: 0.42, shoulderWidth: 0.2, headRadius: 0.1, leanZ: 0.35 }),
       this._makeRobedFigure({ height: 0.8, hemWidth: 0.4, shoulderWidth: 0.19, headRadius: 0.1, armAngle: Math.PI / 2.4, armLength: 0.4 }),
@@ -238,6 +269,7 @@ export class Scene3D {
     ];
     this.discipleFigures.forEach((fig, i) => {
       fig.position.set(...disciplePositions[i]);
+      fig.userData.baseRotZ = fig.rotation.z;
       this.boatGroup.add(fig);
     });
 
@@ -246,11 +278,8 @@ export class Scene3D {
   }
 
   _buildRain() {
-    // Segmentos alargados (streaks) en vez de puntos redondos: se leen
-    // como gotas cayendo, no como confeti. Color gris-azulado
-    // translúcido en vez del cian saturado anterior.
     this._rainCount = 300;
-    const positions = new Float32Array(this._rainCount * 6); // 2 puntos x 3 coords
+    const positions = new Float32Array(this._rainCount * 6);
     for (let i = 0; i < this._rainCount; i++) this._resetDrop(positions, i, true);
 
     const geo = new THREE.BufferGeometry();
@@ -283,43 +312,84 @@ export class Scene3D {
 
   // stage: 'storm-building' | 'storm-peak' | 'command' | 'calm'
   render(elapsedSeconds, stage) {
+    // dt real desde el último frame (no asume 60fps); acotado para que un
+    // frame largo (pestaña en segundo plano, primer frame) no produzca un
+    // salto de golpe en los valores suavizados.
+    const dt = Math.max(0, Math.min(0.2, elapsedSeconds - this._lastElapsed));
+    this._lastElapsed = elapsedSeconds;
+    const t = dt > 0 ? 1 - Math.exp(-dt / TRANSITION_SECONDS) : 0;
+    const tRise = dt > 0 ? 1 - Math.exp(-dt / RISE_SECONDS) : 0;
+
     const isStorm = stage === 'storm-building' || stage === 'storm-peak';
     const isCalm = stage === 'calm';
     const jesusAwake = stage === 'command' || stage === 'calm';
-    this.jesusSleeping.visible = !jesusAwake;
-    this.jesusStanding.visible = jesusAwake;
+    const targetPalette = isCalm ? PALETTE.calm : PALETTE.storm;
 
-    const waveFreq = isStorm ? 1.8 : 0.4;
-    const waveAmp = isStorm ? 0.8 : 0.15;
-    const palette = isCalm ? PALETTE.calm : PALETTE.storm;
+    const targetWaveAmp = isStorm ? 0.8 : 0.15;
+    const targetWaveFreq = isStorm ? 1.8 : 0.4;
+    // Tormenta sube de 1.5 a ~3.2: más contraste para ver la barca y a
+    // las personas sin perder el ánimo sombrío frente a Mandato (4) y
+    // Calma (6). No se toca metalness/roughness del mar (eso fue lo que
+    // causó el destello del Turno 8) — solo la intensidad de esta luz.
+    const targetBackLight = isCalm ? 6 : stage === 'command' ? 4 : 3.2;
 
-    // Colores extraídos UNA vez por frame (no por vértice) para no crear
-    // basura de memoria en el bucle de abajo — importante para que esto
-    // corra bien en un móvil.
-    const deep = new THREE.Color(palette.seaDeep);
-    const shallow = new THREE.Color(palette.seaShallow);
-    const dr = deep.r, dg = deep.g, db = deep.b;
-    const sr = shallow.r, sg = shallow.g, sb = shallow.b;
+    this._curWaveAmp += (targetWaveAmp - this._curWaveAmp) * t;
+    this._curWaveFreq += (targetWaveFreq - this._curWaveFreq) * t;
+    this._curBackLight += (targetBackLight - this._curBackLight) * t;
+    this._curFog.lerp(new THREE.Color(targetPalette.fog), t);
+    this._curAmbient.lerp(new THREE.Color(targetPalette.ambient), t);
+    this._curDeep.lerp(new THREE.Color(targetPalette.seaDeep), t);
+    this._curShallow.lerp(new THREE.Color(targetPalette.seaShallow), t);
+    this._riseProgress += ((jesusAwake ? 1 : 0) - this._riseProgress) * tRise;
+
+    // --- Jesús: coreografía en dos tiempos, nunca un salto ---
+    const r = this._riseProgress;
+    this.jesusSleeping.userData.mat.opacity = 1 - r;
+    this.jesusSleeping.visible = r < 0.98;
+    this.jesusStanding.userData.mat.opacity = r;
+    this.jesusStanding.visible = r > 0.02;
+    this.jesusStanding.position.y = this._jesusStandingBaseY - (1 - r) * 0.15;
+    const arm = this.jesusStanding.userData.arm;
+    if (arm) {
+      const armT = THREE.MathUtils.clamp((r - RISE_BEFORE_ARM) / (1 - RISE_BEFORE_ARM), 0, 1);
+      arm.rotation.z = THREE.MathUtils.lerp(
+        this.jesusStanding.userData.armRestAngle,
+        this.jesusStanding.userData.armTargetAngle,
+        armT
+      );
+    }
+    // Oscilación sutil de "estar vivo" — con riseProgress de factor para
+    // que crezca junto con la aparición de la figura, y una fase propia
+    // para no verse sincronizada con los discípulos.
+    this.jesusStanding.rotation.z = Math.sin(elapsedSeconds * 0.7 + 1.3) * 0.045 * r;
+
+    this.discipleFigures.forEach((fig, i) => {
+      const phase = i * 2.09;
+      const speed = 0.55 + i * 0.12;
+      fig.rotation.z = (fig.userData.baseRotZ || 0) + Math.sin(elapsedSeconds * speed + phase) * 0.05;
+    });
+
+    // --- Mar: mismo enfoque de antes, ahora con los valores suavizados ---
+    const dr = this._curDeep.r, dg = this._curDeep.g, db = this._curDeep.b;
+    const sr = this._curShallow.r, sg = this._curShallow.g, sb = this._curShallow.b;
+    const waveAmp = this._curWaveAmp;
+    const waveFreq = this._curWaveFreq;
 
     const pos = this.oceanMesh.geometry.attributes.position;
     const col = this.oceanMesh.geometry.attributes.color;
     for (let i = 0; i < pos.count; i++) {
       const u = pos.getX(i);
       const v = pos.getY(i);
-      // Dos direcciones de ola superpuestas (antes solo una) para que el
-      // movimiento no se vea como una cuadrícula regular sino orgánico.
       const wave1 = Math.sin(u * 0.5 + elapsedSeconds * waveFreq) * Math.cos(v * 0.5 + elapsedSeconds * waveFreq);
       const wave2 = Math.sin(u * 0.18 - elapsedSeconds * waveFreq * 0.6 + v * 0.12) * 0.5;
       const z = (wave1 + wave2) * waveAmp;
       pos.setZ(i, z);
 
-      const t = THREE.MathUtils.clamp((z / (waveAmp * 1.4)) * 0.5 + 0.5, 0, 1);
-      col.setXYZ(i, dr + (sr - dr) * t, dg + (sg - dg) * t, db + (sb - db) * t);
+      const tHeight = THREE.MathUtils.clamp((z / (waveAmp * 1.4)) * 0.5 + 0.5, 0, 1);
+      col.setXYZ(i, dr + (sr - dr) * tHeight, dg + (sg - dg) * tHeight, db + (sb - db) * tHeight);
     }
     pos.needsUpdate = true;
     col.needsUpdate = true;
-    // Un poco más de brillo en calma (mar liso) que en tormenta (mar
-    // picado) — sin acercarse al valor que causó el destello del Turno 8.
     this.oceanMesh.material.roughness = isCalm ? 0.55 : 0.7;
 
     this.boatGroup.position.y = Math.sin(elapsedSeconds * waveFreq) * waveAmp + 0.5;
@@ -339,9 +409,9 @@ export class Scene3D {
       this.particleSystem.geometry.attributes.position.needsUpdate = true;
     }
 
-    this.scene.fog.color.setHex(palette.fog);
-    this.ambientLight.color.setHex(palette.ambient);
-    this.backLight.intensity = isCalm ? 6 : stage === 'command' ? 4 : 1.5;
+    this.scene.fog.color.copy(this._curFog);
+    this.ambientLight.color.copy(this._curAmbient);
+    this.backLight.intensity = this._curBackLight;
 
     this.renderer.render(this.scene, this.camera);
   }
