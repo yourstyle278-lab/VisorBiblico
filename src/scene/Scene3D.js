@@ -35,8 +35,9 @@
 //    tormenta se agrave como que amaine se sienten como un movimiento
 //    continuo, nunca como un corte.
 //
-// Interfaz pública SIN cambios: constructor(containerEl),
-// render(elapsedSeconds, stage), triggerLightning().
+// Interfaz pública: constructor(containerEl), render(elapsedSeconds,
+// stage), triggerLightning() — sin cambios respecto al Turno 11 — más
+// snapToStage(stage), NUEVO este turno (ver cabecera, Turno 12, punto 1).
 //
 // Nota de honestidad: sigue sin haber confirmación en un navegador real
 // para ESTE cambio específico — se revisó a mano cada valor y cada
@@ -44,6 +45,35 @@
 // tiempos exactos (qué tan rápido se ve bien la subida del brazo, cuánto
 // contraste hace falta de verdad) solo se pueden afinar con la prueba en
 // tu teléfono. Trátalo como un paso adelante, no como algo cerrado.
+//
+// CAMBIO TURNO 12 (ruta: src/scene/Scene3D.js) — a partir de tu prueba
+// real del Turno 11 ("realmente no veo mucho cambio"):
+// 1) 🐛 "Efecto rebobinar" al reiniciar/saltar de etapa: el suavizado
+//    agregado en el Turno 11 (para que la calma se sienta como un
+//    movimiento de paz) se aplicaba TAMBIÉN cuando la escena vuelve
+//    atrás (fin de la secuencia → reinicio, o el botón de versículo
+//    anterior) — y una transición suave DE calma A tormenta es, en la
+//    práctica, la misma transición de tormenta-a-calma reproducida al
+//    revés: de ahí el "rebobinado". Se agregó snapToStage(stage): un
+//    ajuste instantáneo (sin interpolar) de todos los valores
+//    suavizados. AppController decide cuándo llamarlo (ver su propio
+//    changelog) — aquí solo se expone el método nuevo; la interfaz
+//    existente (constructor, render, triggerLightning) no cambia.
+// 2) "Todo oscuro": con evidencia geométrica, no solo impresión — la
+//    cámara mira hacia abajo apenas ~17° con un FOV de 60°, así que
+//    buena parte del cuadro (arriba del horizonte) no tenía NINGUNA
+//    geometría que dibujar; como la escena nunca definió un
+//    scene.background, esa zona se veía negro puro (el fondo de la
+//    página, no algo intencional). Se ató scene.background al mismo
+//    _curFog que ya se suaviza cada cuadro (Turno 11, punto 3) — mismo
+//    color exacto que la niebla en el horizonte, cambia de tormenta a
+//    calma sin ningún costo nuevo. Además la cámara bajó un poco su
+//    mirada (mismo lugar, mismo zoom, solo apunta más abajo) para que
+//    quede menos cuadro por encima del horizonte. 💡 Pendiente de tu
+//    prueba real: esto reduce el vacío, pero un cielo con estrellas
+//    daría aún más atmósfera — propuesto para una próxima pasada, no
+//    implementado todavía para no arriesgar la composición que ya
+//    aprobaste ("la barca se ve mejor").
 
 import * as THREE from 'three';
 
@@ -89,6 +119,15 @@ export class Scene3D {
     this._curShallow = new THREE.Color(PALETTE.storm.seaShallow);
     this._riseProgress = 0; // 0 = dormido, 1 = de pie y con el brazo en alto
     this._lastElapsed = 0;
+
+    // El "cielo" (todo lo que queda por encima del horizonte, donde no
+    // hay ninguna geometría) nunca tuvo su propio color — por eso se
+    // veía negro puro. Se ata a la MISMA instancia de _curFog que ya se
+    // suaviza cada cuadro en render() (por eso .lerp()/.set() y nunca
+    // "= new THREE.Color(...)" en esa variable — reemplazar el objeto
+    // rompería esta referencia), así que el cielo sigue el color de la
+    // niebla del horizonte sin ningún cálculo nuevo (Turno 12).
+    this.scene.background = this._curFog;
   }
 
   _buildScene() {
@@ -102,7 +141,13 @@ export class Scene3D {
       1000
     );
     this.camera.position.set(0, 3, 10);
-    this.camera.lookAt(0, 0, 0);
+    // Antes miraba exactamente a (0,0,0): con un FOV de 60° eso dejaba
+    // cerca de un tercio del cuadro por encima del horizonte sin ninguna
+    // geometría que dibujar (Turno 12, "todo oscuro"). Bajar el punto de
+    // mira sube la línea de horizonte dentro del cuadro — la barca y las
+    // figuras quedan del mismo tamaño de antes (ni la posición ni el
+    // zoom de la cámara cambiaron), solo se recorta distinto verticalmente.
+    this.camera.lookAt(0, -0.8, 0);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
@@ -308,6 +353,37 @@ export class Scene3D {
     this.camera.aspect = this.container.clientWidth / this.container.clientHeight;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(this.container.clientWidth, this.container.clientHeight);
+  }
+
+  // Ajusta AL INSTANTE (sin transición) todos los valores suavizados al
+  // objetivo de `stage` — mismas fórmulas de destino que usa render(),
+  // pero asignadas directo en vez de acercarse con `t`. Para un CORTE
+  // DURO: cuando la escena vuelve a un punto muy distinto de donde
+  // estaba (reinicio de toda la secuencia, o saltar de versículo hacia
+  // atrás/adelante con los botones). AppController decide cuándo
+  // llamarlo, comparando el índice de versículo nuevo contra el último
+  // narrado (ver su propio changelog, Turno 12). Sin esto, el mismo
+  // suavizado que hace que la calma se sienta "un movimiento de paz"
+  // (Turno 11, TRANSITION_SECONDS) también se aplicaba al volver de la
+  // calma a la tormenta, y esa interpolación de regreso se ve
+  // exactamente como "rebobinar" la transición — el bug del Turno 12.
+  // Usa .set()/.set(...) sobre los mismos objetos THREE.Color en vez de
+  // reemplazarlos, para no romper la referencia de scene.background
+  // (ver constructor).
+  snapToStage(stage) {
+    const isCalm = stage === 'calm';
+    const isStorm = stage === 'storm-building' || stage === 'storm-peak';
+    const jesusAwake = stage === 'command' || stage === 'calm';
+    const targetPalette = isCalm ? PALETTE.calm : PALETTE.storm;
+
+    this._curWaveAmp = isStorm ? 0.8 : 0.15;
+    this._curWaveFreq = isStorm ? 1.8 : 0.4;
+    this._curBackLight = isCalm ? 6 : stage === 'command' ? 4 : 3.2;
+    this._curFog.set(targetPalette.fog);
+    this._curAmbient.set(targetPalette.ambient);
+    this._curDeep.set(targetPalette.seaDeep);
+    this._curShallow.set(targetPalette.seaShallow);
+    this._riseProgress = jesusAwake ? 1 : 0;
   }
 
   // stage: 'storm-building' | 'storm-peak' | 'command' | 'calm'
