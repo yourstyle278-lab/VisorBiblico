@@ -17,6 +17,30 @@
 // - pause()/resume() se dejan aquí por si alguna vez se detecta un
 //   navegador donde sí funcionen, pero AppController.js YA NO los llama
 //   (rotos en Chrome/Android — ver comentario en AppController.js).
+//
+// CAMBIO TURNO 13 (ruta: src/audio/VoiceEngine.js) — causa raíz
+// confirmada del "empieza desde el principio" reportado en el Turno 12:
+// stop() llama a synth.cancel(), y cancel() dispara onend U onerror de
+// la utterance que se estaba hablando — pero de forma ASÍNCRONA, después
+// de que stop() ya terminó de ejecutarse. Como AMBOS manejadores
+// (onend Y onerror, líneas de _speakNext() más abajo) llamaban a
+// _speakNext() sin condición, y stop() ya había dejado _queue en [] y
+// _currentIndex en -1 antes de que ese evento tardío llegara,
+// _speakNext() veía "0 >= 0" (cola vacía) y disparaba onSequenceEnd()
+// por error — en CADA pausa, no solo al llegar al final. (Mismo defecto,
+// más sutil, en speakSequence(): si algo se estaba narrando al saltar de
+// versículo con los botones, la utterance vieja cancelada podía volver a
+// llamar _speakNext() después de que la NUEVA ya había empezado,
+// adelantando el índice un versículo de más o cerrando la secuencia de
+// golpe — no confirmado que el usuario lo haya notado, pero es la misma
+// causa y ya queda cerrada con el mismo arreglo.)
+// Arreglo: _speakNext() ahora guarda la utterance activa en
+// this._currentUtterance; stop() le quita sus 3 manejadores (onend,
+// onerror, onboundary) ANTES de llamar a cancel() — así, cuando el
+// evento tardío de cancelación finalmente llega, no dispara nada. Ya no
+// depende de ningún tiempo de espera ni de que AppController adivine
+// cuándo ignorar un evento (ver el otro lado de este arreglo, la
+// bandera _manualStop, en AppController.js).
 
 export class VoiceEngine {
   constructor({ lang = 'es-ES', rate = 0.95 } = {}) {
@@ -32,6 +56,7 @@ export class VoiceEngine {
 
     this._queue = [];
     this._currentIndex = -1;
+    this._currentUtterance = null; // Turno 13 — ver cabecera
     this._fallbackTimer = null;
     this._estimatedTimers = [];
   }
@@ -70,6 +95,7 @@ export class VoiceEngine {
     const index = this._currentIndex;
     const verseText = this._queue[index].text;
     const utterance = new SpeechSynthesisUtterance(verseText);
+    this._currentUtterance = utterance; // Turno 13 — para que stop() pueda silenciarla
     utterance.lang = this.lang;
     utterance.rate = this.rate;
     const voice = this.pickVoice();
@@ -151,6 +177,16 @@ export class VoiceEngine {
   stop() {
     clearTimeout(this._fallbackTimer);
     this._clearEstimatedTimers();
+    // Turno 13: quitar los manejadores ANTES de cancelar. cancel()
+    // dispara onend/onerror de forma asíncrona — si los dejáramos
+    // puestos, ese evento tardío llamaría a _speakNext() sin saber que
+    // fue un stop() intencional (ver cabecera de este archivo).
+    if (this._currentUtterance) {
+      this._currentUtterance.onend = null;
+      this._currentUtterance.onerror = null;
+      this._currentUtterance.onboundary = null;
+      this._currentUtterance = null;
+    }
     if (this.supported) this.synth.cancel();
     this._queue = [];
     this._currentIndex = -1;
