@@ -57,6 +57,30 @@
 //   archivo, pero afectan lo que ves — Scene3D ahora ata el color del
 //   cielo a la niebla y bajó un poco la mirada de la cámara, por el
 //   reclamo de "todo oscuro".
+//
+// CAMBIOS TURNO 13 — con VoiceEngine.js y AudioEngine.js ya en mano:
+// - ✅ CONFIRMADO (ya no es hipótesis): stop() sí disparaba
+//   onSequenceEnd por error en cada pausa — la causa exacta, con
+//   evidencia de código, quedó documentada en VoiceEngine.js (Turno 13)
+//   y arreglada DE RAÍZ ahí mismo (la utterance cancelada ya no puede
+//   volver a llamar a nada). La bandera _manualStop de aquí abajo
+//   dejó de ser indispensable, pero se deja como red de seguridad
+//   adicional — no estorba, y no depende de adivinar un tiempo de
+//   espera si algún día VoiceEngine.js cambia otra vez.
+// - AudioEngine.js: revisado completo, no participa en ninguno de los
+//   dos bugs (ni el rebobinado visual ni el reinicio de narración) — su
+//   pause()/play() manejan su propio reloj de audio correctamente y no
+//   se tocó.
+//
+// CAMBIOS TURNO 14 (Fase 3 del DCM — libro de dos páginas):
+// - NUEVO: this._bookPageLeftEl / this._bookPageRightEl (ver index.html,
+//   el HTML del libro está allá) + this._lastShownVerseIndex, para saber
+//   si _showVerse() está mostrando un versículo REALMENTE distinto al
+//   anterior (no una repetición por pausa/resume, ver Turno 12).
+// - NUEVO: _playPageTurn(), llamado al final de _showVerse() solo
+//   cuando el versículo cambió de verdad — agrega/quita la clase CSS
+//   "page-turning" en las dos páginas (la animación en sí vive en
+//   index.html, esto solo la dispara en el momento correcto).
 
 import { AmbientAudioEngine } from '../audio/AudioEngine.js';
 import { VoiceEngine } from '../audio/VoiceEngine.js';
@@ -85,12 +109,19 @@ export class AppController {
     // distinguir avance natural de un salto que necesita corte duro en
     // Scene3D (ver cabecera, Turno 12). -1 = todavía no narró nada.
     this._lastNarratedIndex = -1;
+    // Turno 14: último versículo MOSTRADO en el libro (no narrado) —
+    // para disparar el efecto de pasar página solo cuando el contenido
+    // realmente cambia, no cuando _showVerse se repite por el mismo
+    // versículo (pausa/resume, ver Turno 12).
+    this._lastShownVerseIndex = -1;
 
     this.scriptureEl = document.getElementById('scripture-container');
     this.stageLabelEl = document.getElementById('scene-state-text');
     this.progressEl = document.getElementById('timeline-progress');
     this.playIcon = document.getElementById('play-icon');
     this.exegesisEl = document.getElementById('exegesis-text');
+    this._bookPageLeftEl = document.getElementById('book-page-left');
+    this._bookPageRightEl = document.getElementById('book-page-right');
 
     // El aviso de derechos es obligatorio para poder usar RVR1960 sin
     // pedir permiso escrito (ver comentario en src/data/scripture.js) —
@@ -107,6 +138,14 @@ export class AppController {
   _showVerse(index) {
     const v = SCRIPTURE_PERICOPE[index];
     if (!v || !this.scriptureEl) return;
+
+    // Turno 14: ¿es un versículo distinto al último que se MOSTRÓ, y ya
+    // había uno mostrado antes? Si sí, vale la pena "pasar la página" —
+    // si no (primera vez, o el mismo versículo repitiéndose por una
+    // pausa), no: no hay página anterior que pasar, o no cambió nada.
+    const isRealChange = this._lastShownVerseIndex !== -1 && index !== this._lastShownVerseIndex;
+    this._lastShownVerseIndex = index;
+
     this.scriptureEl.innerHTML = '';
 
     const refEl = document.createElement('p');
@@ -129,6 +168,25 @@ export class AppController {
     this._currentVerseRaw = v.text;
 
     if (this.exegesisEl) this.exegesisEl.textContent = v.exegesis || '';
+
+    if (isRealChange) this._playPageTurn();
+  }
+
+  // Turno 14 (Fase 3): dispara brevemente la clase CSS "page-turning" en
+  // las dos páginas del libro (ver <style> en index.html) — un giro
+  // breve sobre el lomo con una sombra pasajera, no una simulación
+  // física de curvar la hoja. Se quita y se vuelve a poner (con un
+  // reflow forzado en medio) para poder repetirse aunque el versículo
+  // cambie antes de que la animación anterior termine.
+  _playPageTurn() {
+    [this._bookPageLeftEl, this._bookPageRightEl].forEach((el) => {
+      if (!el) return;
+      el.classList.remove('page-turning');
+      void el.offsetWidth; // fuerza el reflow — sin esto, quitar y poner
+                           // la misma clase en el mismo tick no reinicia
+                           // la animación, el navegador la ignora.
+      el.classList.add('page-turning');
+    });
   }
 
   _escape(str) {
@@ -229,9 +287,10 @@ export class AppController {
 
     this.voice.onSequenceEnd = () => {
       if (this._manualStop) {
-        // Este "fin" llegó por nuestro propio stop() dentro de pause(),
-        // no porque de verdad se acabó la perícopa — ver pause() y la
-        // cabecera (Turno 12, preventivo sin confirmar).
+        // Este "fin" llegó por nuestro propio stop() dentro de pause() —
+        // confirmado en el Turno 13 (ver VoiceEngine.js: cancel() dispara
+        // onend/onerror de forma tardía). Ya arreglado de raíz allá; esto
+        // es red de seguridad, no la defensa principal.
         this._manualStop = false;
         return;
       }
@@ -323,13 +382,13 @@ export class AppController {
 
   pause() {
     this.ambient.pause();
-    // PREVENTIVO (Turno 12, sin confirmar todavía — ver cabecera): si el
-    // motor de voz dispara su evento de "fin de secuencia" como reacción
-    // a este stop() (en vez de solo al terminar el último versículo de
-    // verdad), esta bandera hace que onSequenceEnd lo ignore, para que
-    // una pausa cualquiera no reinicie currentVerseIndex a -1. Se limpia
-    // sola en 300ms si no llegó ningún evento, para no tapar un fin de
-    // secuencia real más adelante.
+    // ✅ CONFIRMADO en el Turno 13 (ver VoiceEngine.js): stop() SÍ podía
+    // disparar el "fin de secuencia" por error, porque cancel() dispara
+    // onend/onerror de la utterance cancelada de forma tardía. Ya está
+    // arreglado de raíz allá (la utterance cancelada ya no puede llamar
+    // a nada). Esta bandera queda como red de seguridad adicional — se
+    // limpia sola en 300ms si no llegó ningún evento, para no tapar un
+    // fin de secuencia real más adelante.
     this._manualStop = true;
     setTimeout(() => { this._manualStop = false; }, 300);
     // stop() (cancel) en vez de pause() — mismo motivo que en play():
