@@ -13,6 +13,71 @@
     href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;900&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap"
     rel="stylesheet"
   />
+
+  <!-- NUEVO Turno 14 (Fase 3 del DCM): libro de dos páginas abiertas +
+       efecto de pasar la página, pedido desde el principio del proyecto
+       ("quiere el libro mostrado como dos páginas abiertas, con efecto
+       de pasar la página"). Definido aquí mismo, autocontenido: este
+       archivo no tiene ningún <style> ni hoja de estilos propia todavía
+       (glass-panel/font-cinzel deben venir de la config de Tailwind del
+       proyecto Vite real, que no forma parte de lo que se sube en este
+       chat) — para no depender de algo que no puedo ver ni verificar,
+       todo lo nuevo del libro se define aquí con CSS plano. -->
+  <style>
+    .book-wrap { perspective: 1400px; }
+    .book-spread {
+      display: flex;
+      align-items: stretch;
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 18px 40px -14px rgba(0,0,0,0.65), 0 0 0 1px rgba(217,164,65,0.15);
+    }
+    .book-page {
+      flex: 1 1 50%;
+      min-width: 0;
+      padding: 16px 14px 18px;
+      position: relative;
+      background:
+        radial-gradient(120% 140% at 15% 0%, rgba(255,247,224,0.05), transparent 55%),
+        linear-gradient(180deg, #221b13, #16110b);
+    }
+    .book-page-left { transform-origin: right center; }
+    .book-page-right { transform-origin: left center; }
+    /* Sombra sutil junto al lomo, como una hoja curvándose hacia el
+       pliegue — no una simulación física, solo la insinuación. */
+    .book-page-left::after,
+    .book-page-right::before {
+      content: ""; position: absolute; top: 0; bottom: 0; width: 22px; pointer-events: none;
+    }
+    .book-page-left::after { right: 0; background: linear-gradient(90deg, transparent, rgba(0,0,0,0.35)); }
+    .book-page-right::before { left: 0; background: linear-gradient(270deg, transparent, rgba(0,0,0,0.35)); }
+    .book-spine {
+      flex: 0 0 14px;
+      background: linear-gradient(90deg, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0.1) 35%, rgba(0,0,0,0.1) 65%, rgba(0,0,0,0.6) 100%);
+      box-shadow: inset 0 0 14px 2px rgba(0,0,0,0.65);
+    }
+    /* Efecto de "pasar la página": un giro breve sobre el borde del
+       lomo con una sombra pasajera — no un flip físico con
+       backface-visibility, que es frágil en navegadores móviles viejos
+       (ver DCM, notas de Android/Samsung Browser). Se dispara solo
+       cuando el versículo realmente cambia (ver _showVerse en
+       AppController.js), no en cada pausa/resume. */
+    .book-page-left.page-turning { animation: page-turn-left 0.5s ease-in-out; }
+    .book-page-right.page-turning { animation: page-turn-right 0.5s ease-in-out; }
+    @keyframes page-turn-left {
+      0% { transform: rotateY(0deg); filter: brightness(1); }
+      45% { transform: rotateY(-9deg); filter: brightness(0.82); }
+      100% { transform: rotateY(0deg); filter: brightness(1); }
+    }
+    @keyframes page-turn-right {
+      0% { transform: rotateY(0deg); filter: brightness(1); }
+      45% { transform: rotateY(9deg); filter: brightness(0.82); }
+      100% { transform: rotateY(0deg); filter: brightness(1); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .book-page-left.page-turning, .book-page-right.page-turning { animation: none; }
+    }
+  </style>
 </head>
 <body class="min-h-screen flex flex-col justify-between relative selection:bg-amber-500 selection:text-black">
 
@@ -83,25 +148,31 @@
       </div>
     </div>
 
-    <div class="glass-panel p-5 rounded-2xl border border-slate-800">
-      <div class="flex items-center space-x-2 border-b border-slate-800 pb-3 mb-3">
-        <i class="fa-solid fa-book-bible text-amber-400 text-lg"></i>
-        <h2 class="font-cinzel font-bold text-white text-sm">Perícopa: Marcos 4:35-41</h2>
+    <!-- FASE 3 (Turno 14): libro de dos páginas abiertas, en vez de dos
+         paneles apilados — página izquierda = perícopa, página derecha
+         = reflexión, con lomo al centro. El efecto de "pasar la página"
+         lo dispara AppController._showVerse() agregando/quitando la
+         clase page-turning en cada #book-page-*, ver <style> arriba. -->
+    <div class="book-wrap">
+      <div class="book-spread">
+        <div id="book-page-left" class="book-page book-page-left">
+          <div class="flex items-center space-x-2 border-b border-amber-900/40 pb-2 mb-2">
+            <i class="fa-solid fa-book-bible text-amber-400 text-sm"></i>
+            <h2 class="font-cinzel font-bold text-white text-xs">Perícopa: Marcos 4:35-41</h2>
+          </div>
+          <!-- Antes mostraba los 5 versículos en una caja con scroll; ahora
+               solo el que se está narrando (pedido explícito del Turno 9). -->
+          <div id="scripture-container" class="text-base leading-relaxed text-slate-200"></div>
+        </div>
+        <div class="book-spine" aria-hidden="true"></div>
+        <div id="book-page-right" class="book-page book-page-right">
+          <h3 class="flex items-center space-x-2 font-cinzel font-bold text-amber-400 text-xs mb-2">
+            <i class="fa-solid fa-feather"></i>
+            <span>Reflexión</span>
+          </h3>
+          <p id="exegesis-text" class="text-sm text-slate-300 italic leading-relaxed"></p>
+        </div>
       </div>
-      <!-- Antes mostraba los 5 versículos en una caja con scroll; ahora
-           solo el que se está narrando (pedido explícito del Turno 9). -->
-      <div id="scripture-container" class="text-lg leading-relaxed text-slate-200"></div>
-    </div>
-
-    <!-- NUEVO Turno 11: panel de reflexión — pedido tras ver la sección
-         "Exégesis" de los ejemplos de Gemini. Texto propio por versículo,
-         ver src/data/scripture.js. -->
-    <div class="glass-panel-gold p-5 rounded-2xl">
-      <h3 class="flex items-center space-x-2 font-cinzel font-bold text-amber-400 text-xs uppercase tracking-wide mb-2">
-        <i class="fa-solid fa-feather"></i>
-        <span>Reflexión</span>
-      </h3>
-      <p id="exegesis-text" class="text-sm text-slate-300 italic leading-relaxed"></p>
     </div>
 
   </main>
