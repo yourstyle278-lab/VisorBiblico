@@ -81,6 +81,30 @@
 //   cuando el versículo cambió de verdad — agrega/quita la clase CSS
 //   "page-turning" en las dos páginas (la animación en sí vive en
 //   index.html, esto solo la dispara en el momento correcto).
+//
+// CAMBIOS TURNO 17 (reestructuración: libro literal con el Visor
+// incrustado, aprobada en el Turno 16 — "manos a la obra"):
+// - NUEVO: this._startBtn (id btn-start-immersion, en la página
+//   izquierda del libro) + _startImmersion() + _disintegrate(): al
+//   tocar el botón, cada letra del texto en pantalla se envuelve en su
+//   propio <span> y se anima (desplazamiento/giro/desvanecido al azar,
+//   con retraso escalonado) — la versión casera del efecto "portal"
+//   investigado en el Turno 16, sin ninguna librería nueva. 650ms
+//   después arranca el play() de siempre.
+// - CAMBIO DE COMPORTAMIENTO: el botón "Iniciar" del modal de audio ya
+//   NO llama a play() — solo habilita el audio y cierra el modal. Antes
+//   la narración arrancaba sola al cerrarlo; ahora el que la inicia es
+//   el botón del libro, para que el efecto de desintegración sea el
+//   único camino de entrada "de cine" (los controles compactos de la
+//   página derecha siguen pudiendo iniciar/pausar sin el adorno).
+// - NUEVO: el constructor ahora llama a _showVerse(0) y a
+//   scene3D.render(0, ...) una vez — antes la página izquierda quedaba
+//   vacía y el canvas sin dibujar hasta que play() arrancaba, y con el
+//   libro nuevo no habría nada que leer ni que tocar al cargar.
+// - onSequenceEnd vuelve a mostrar el botón de inmersión al terminar la
+//   perícopa de verdad, para poder repetirla.
+// - _showVerse: el color de la línea de referencia pasó de slate-500 a
+//   stone-500 (la página ahora es pergamino claro, no oscura).
 
 import { AmbientAudioEngine } from '../audio/AudioEngine.js';
 import { VoiceEngine } from '../audio/VoiceEngine.js';
@@ -122,6 +146,9 @@ export class AppController {
     this.exegesisEl = document.getElementById('exegesis-text');
     this._bookPageLeftEl = document.getElementById('book-page-left');
     this._bookPageRightEl = document.getElementById('book-page-right');
+    // Turno 17: botón "toca para la inmersión 3D" en la página
+    // izquierda — ver _startImmersion() más abajo.
+    this._startBtn = document.getElementById('btn-start-immersion');
 
     // El aviso de derechos es obligatorio para poder usar RVR1960 sin
     // pedir permiso escrito (ver comentario en src/data/scripture.js) —
@@ -131,6 +158,19 @@ export class AppController {
 
     this._wireVoiceEvents();
     this._wireControls();
+
+    // Turno 17: antes, la página izquierda quedaba vacía hasta que
+    // play() arrancaba de verdad — ahora el libro debe mostrar el primer
+    // versículo y su reflexión DESDE que carga, para que haya algo que
+    // leer y tocar antes de iniciar la inmersión. isRealChange sale
+    // false aquí (aún no hay "último mostrado"), así que no dispara
+    // ningún efecto de pasar página — es solo la primera pintura.
+    this._showVerse(0);
+    // Primer cuadro estático de la escena (tormenta, quieta) para que la
+    // página derecha no se vea negra/vacía antes de tocar inmersión —
+    // sin esto, render() nunca se había llamado ni una vez (solo lo
+    // llama _startAnimLoop, y eso solo arranca con play()).
+    this.scene3D.render(0, this.currentStage);
   }
 
   // Reemplaza TODO el contenido del panel por el versículo `index` — ya
@@ -149,7 +189,7 @@ export class AppController {
     this.scriptureEl.innerHTML = '';
 
     const refEl = document.createElement('p');
-    refEl.className = 'text-xs text-slate-500 mb-2';
+    refEl.className = 'text-xs text-stone-500 mb-2';
     refEl.textContent = SCRIPTURE_REFERENCE;
 
     const verseP = document.createElement('p');
@@ -186,6 +226,63 @@ export class AppController {
                            // la misma clase en el mismo tick no reinicia
                            // la animación, el navegador la ignora.
       el.classList.add('page-turning');
+    });
+  }
+
+  // Turno 17: lo que dispara el botón "Toca para la inmersión 3D" de la
+  // página izquierda. Primero el adorno visual (desintegrar lo que ya
+  // está en pantalla), y solo después play() de verdad — el mismo
+  // play() de siempre, sin ninguna lógica nueva de reproducción aquí.
+  // El retraso (650ms) le da tiempo a la animación de letras a
+  // terminar de verse antes de que _showVerse() vuelva a escribir el
+  // panel con el primer versículo real.
+  _startImmersion() {
+    if (this._startBtn) this._startBtn.classList.add('hidden');
+    this._disintegrate(this.scriptureEl);
+    if (this.exegesisEl) this._disintegrate(this.exegesisEl);
+    setTimeout(() => this.play(), 650);
+  }
+
+  // Envuelve cada carácter visible de `container` en su propio <span
+  // class="dissolve-letter"> (la transición vive en el CSS, ver
+  // index.html) y lo anima con un desplazamiento/giro al azar y un
+  // pequeño retraso escalonado por letra — la versión casera del efecto
+  // de "texto que se desintegra" investigada en el Turno 16. Se
+  // prefirió esto sobre una librería como Disintegrate.js porque no
+  // agrega ninguna dependencia nueva ni una conversión DOM→canvas de
+  // por medio, que es justo el tipo de cosa que ya nos ha dado
+  // sorpresas en Android/Samsung Browser (Turnos 7, 12, 13).
+  _disintegrate(container) {
+    if (!container) return;
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+    const textNodes = [];
+    let node;
+    while ((node = walker.nextNode())) textNodes.push(node);
+    textNodes.forEach((textNode) => {
+      const frag = document.createDocumentFragment();
+      [...textNode.textContent].forEach((ch) => {
+        if (ch.trim() === '') {
+          frag.appendChild(document.createTextNode(ch));
+          return;
+        }
+        const span = document.createElement('span');
+        span.className = 'dissolve-letter';
+        span.textContent = ch;
+        const dx = (Math.random() - 0.5) * 50;
+        const dy = -15 - Math.random() * 45;
+        const rot = (Math.random() - 0.5) * 70;
+        span.style.transitionDelay = `${Math.random() * 200}ms`;
+        // requestAnimationFrame: si se pusiera el transform ya mismo,
+        // en el mismo cuadro en que el span entra al DOM, el navegador
+        // no tiene un estado "antes" del que animar y salta directo al
+        // final — sin transición visible.
+        requestAnimationFrame(() => {
+          span.style.transform = `translate(${dx}px, ${dy}px) rotate(${rot}deg)`;
+          span.style.opacity = '0';
+        });
+        frag.appendChild(span);
+      });
+      textNode.parentNode.replaceChild(frag, textNode);
     });
   }
 
@@ -296,6 +393,10 @@ export class AppController {
       }
       this.pause();
       this.currentVerseIndex = -1;
+      // Turno 17: si de verdad se acabó la perícopa (no un stop()
+      // manual, ya descartado arriba), vuelve a aparecer el botón de
+      // inmersión para poder repetir la experiencia desde el principio.
+      if (this._startBtn) this._startBtn.classList.remove('hidden');
     };
   }
 
@@ -320,6 +421,11 @@ export class AppController {
     const initBtn = document.getElementById('btn-init-audio');
     if (initBtn) {
       initBtn.addEventListener('click', () => {
+        // Turno 17: antes esto llamaba a play() directamente — con el
+        // libro nuevo, este botón solo debe habilitar el audio (gesto
+        // del usuario, exigido por el navegador) y cerrar el modal; el
+        // que de verdad arranca la inmersión es btn-start-immersion, en
+        // la página izquierda, con su efecto de desintegración.
         this.ambient.init();
         const modal = document.getElementById('audio-bridge-modal');
         if (modal) {
@@ -328,8 +434,11 @@ export class AppController {
             modal.style.display = 'none';
           }, 500);
         }
-        this.play();
       });
+    }
+
+    if (this._startBtn) {
+      this._startBtn.addEventListener('click', () => this._startImmersion());
     }
 
     const playPauseBtn = document.getElementById('btn-play-pause');
