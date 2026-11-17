@@ -5,121 +5,153 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Visor Bíblico 3D — Marcos 4:35-41</title>
 
+  <!-- guardian-ok(external-script-no-sri): Tailwind Play CDN no tiene version fija y no admite SRI; plan: Tailwind compilado en el build (DCM, Seguridad) -->
   <script src="https://cdn.tailwindcss.com"></script>
+  <!-- guardian-ok(external-style-no-sri): Font Awesome en cdnjs: falta agregar integrity (copiar el SRI desde cdnjs); pendiente en el DCM -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <!-- guardian-ok(external-style-no-sri): Google Fonts sirve CSS distinto por navegador y no admite SRI; alternativa futura: tipografias autoalojadas -->
   <link
-    href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;900&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap"
+    href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;900&family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap"
     rel="stylesheet"
   />
 
-  <!-- REDISEÑO Turno 17 (reemplaza el del Turno 14/15): la versión
-       anterior era dos columnas oscuras con un lomo entre ellas — no se
-       leía como "un libro" (confirmado, Turno 15). Tu captura de
-       referencia (una app de lectura con lomo de cuero, página color
-       pergamino, listón, encabezado de capítulo) dejó claro que querías
-       algo literal: un libro de verdad, con el Visor viviendo DENTRO de
-       la página derecha. Sigue autocontenido aquí (ver nota del Turno 14
-       sobre por qué: este archivo no tiene su propia hoja de estilos). -->
+  <!-- LIBRO LITERAL (Turnos 17-18). Autocontenido en este archivo: aquí no hay
+       hoja de estilos propia, y glass-panel / font-cinzel / word-active viven en
+       la configuración del proyecto Vite real, que no se ve desde este chat.
+       Por eso todo lo del libro es CSS plano y con su propio reseteo acotado:
+       se ve igual haya o no Tailwind cargado. -->
   <style>
-    .book-wrap { perspective: 1400px; }
+    /* --- reseteo acotado al libro --- */
+    .book-wrap, .book-wrap * { box-sizing: border-box; }
+    .book-wrap h2, .book-wrap p, .book-wrap figure { margin: 0; }
+    .book-wrap button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+    .bk-hidden { display: none !important; }
+    .book-wrap[data-mode="reading"] .only-immersion { display: none !important; }
+    .book-wrap[data-mode="immersion"] .only-reading { display: none !important; }
+
+    /* --- cubierta y páginas --- */
+    .book-wrap { position: relative; width: 100%; }
     .book-cover {
-      padding: 10px;
-      border-radius: 20px;
+      position: relative; padding: 10px; border-radius: 20px;
       background: linear-gradient(160deg, #5a3a1e, #2e1c0d);
       box-shadow: 0 20px 45px -16px rgba(0,0,0,0.7), 0 0 0 1px rgba(217,164,65,0.15);
     }
-    .book-spread {
-      display: flex;
-      flex-direction: column;
-      border-radius: 12px;
-      overflow: hidden;
-    }
-    /* Lado a lado solo en pantallas anchas (tablet/escritorio) — en un
-       teléfono angosto, partir el Visor 3D a la mitad del ancho lo
-       encogería después de todo el trabajo de composición/cámara ya
-       hecho (Turno 12) — mejor apilar: texto arriba, escena abajo. */
-    @media (min-width: 900px) {
-      .book-spread { flex-direction: row; }
-    }
+    .book-spread { display: flex; flex-direction: column; border-radius: 12px; overflow: hidden; }
     .book-page {
-      flex: 1 1 auto;
-      min-width: 0;
-      min-height: 320px;
-      padding: 18px 16px 20px;
-      position: relative;
-      background-color: #e7d8ae;
+      flex: 1 1 auto; min-width: 0; position: relative; display: flex; flex-direction: column;
+      padding: 24px 22px 18px; background-color: #e7d8ae;
       background-image:
         radial-gradient(35% 28% at 15% 10%, rgba(120,95,55,0.16), transparent 70%),
         radial-gradient(30% 24% at 88% 90%, rgba(120,95,55,0.14), transparent 70%);
       box-shadow: inset 0 0 26px rgba(60,45,20,0.18);
-    }
-    .book-page-inner { position: relative; height: 100%; display: flex; flex-direction: column; }
-    .book-heading-rule { width: 60px; height: 3px; background: linear-gradient(90deg, #b8862f, transparent); margin: 6px 0 12px; }
-    .book-label {
-      font-size: 0.68rem; letter-spacing: 0.06em; color: #8a6a3a; font-weight: 700; margin-bottom: 4px;
-    }
-    .book-tap-btn {
-      display: flex; align-items: center; justify-content: center; gap: 8px;
-      border: 1.5px dashed rgba(140,95,35,0.5);
-      border-radius: 10px; padding: 11px 12px; margin-top: 14px;
-      color: #7a5322; font-weight: 600; font-size: 0.78rem;
-      background: rgba(255,255,255,0.18);
-    }
-    .book-tap-btn.hidden { display: none; }
-    .book-scene-frame { padding: 8px; display: flex; }
-    /* Altura DEFINIDA (no solo mínima): el contenedor del canvas usa
-       h-full, y un porcentaje solo resuelve si el padre tiene una altura
-       real — con solo min-height, clientHeight podía salir 0 justo
-       cuando Scene3D lee el tamaño al construirse, y el Visor quedaría
-       en blanco. (Antes la sección de la escena tenía h-[400px] fija.) */
-    .book-scene-inner {
-      position: relative; width: 100%; height: 360px; border-radius: 10px; overflow: hidden;
-      background: #000; flex: 0 0 auto;
-    }
-    @media (min-width: 900px) {
-      .book-scene-inner { height: 460px; }
-    }
-    .book-mini-controls {
-      position: absolute; left: 0; right: 0; bottom: 0; z-index: 10;
-      padding: 8px 10px; background: linear-gradient(0deg, rgba(0,0,0,0.55), transparent);
-      display: flex; flex-direction: column; gap: 6px;
     }
     .book-spine {
       flex: 0 0 16px;
       background: repeating-linear-gradient(180deg, #4a3018 0px, #4a3018 3px, #2e1c0d 3px, #2e1c0d 6px);
       box-shadow: inset 0 0 10px 2px rgba(0,0,0,0.6);
     }
-    @media (min-width: 900px) {
+    /* Horizontal (como una película): las dos páginas abiertas lado a lado */
+    @media (orientation: landscape) and (min-width: 640px) {
+      .book-spread { flex-direction: row; }
+      .book-page { flex: 1 1 0; }
       .book-spine { background: repeating-linear-gradient(90deg, #4a3018 0px, #4a3018 3px, #2e1c0d 3px, #2e1c0d 6px); }
     }
-    /* Efecto de "pasar la página": ya no un giro rotateY (pensado para
-       lado-a-lado; con el apilado de arriba se vería mal orientado) —
-       ahora un asentamiento sutil de escala/brillo, funciona igual en
-       cualquiera de las dos disposiciones. Se dispara solo cuando el
-       versículo realmente cambia (ver _showVerse en AppController.js). */
-    .book-page.page-turning { animation: page-settle 0.5s ease-in-out; }
-    @keyframes page-settle {
-      0% { transform: scale(1); filter: brightness(1); }
-      40% { transform: scale(0.985); filter: brightness(0.88); }
-      100% { transform: scale(1); filter: brightness(1); }
+    /* En vertical, al entrar en la inmersión la lámina va ARRIBA (lo principal es
+       lo que se ve y se oye); el texto sigue debajo con el resaltado. En
+       horizontal las páginas quedan como siempre: texto a la izquierda, lámina
+       a la derecha. */
+    @media (max-width: 639px), (orientation: portrait) {
+      .book-wrap[data-mode="immersion"] .book-spread { flex-direction: column-reverse; }
+      .book-wrap[data-mode="immersion"] #book-page-right .book-folio::before { content: "\2014  1  \2014"; }
+      .book-wrap[data-mode="immersion"] #book-page-left .book-folio::before { content: "\2014  2  \2014"; }
     }
+
+    /* --- tipografía de libro --- */
+    .book-running { font-family: 'Cinzel', serif; font-size: 0.62rem; letter-spacing: 0.16em; text-transform: uppercase; color: #8a6a3a; text-align: center; }
+    .book-title { font-family: 'Cinzel', serif; font-weight: 700; font-size: 1.4rem; line-height: 1.2; color: #2a1c0c; text-align: center; margin-top: 6px !important; }
+    .book-rule { width: 72px; height: 3px; margin: 10px auto 16px; background: linear-gradient(90deg, transparent, #b8862f, transparent); }
+    .book-body { font-family: 'EB Garamond', Georgia, 'Times New Roman', serif; font-size: 1.2rem; line-height: 1.6; color: #2a1c0c; }
+    .book-body .verse { margin: 0 0 0.6em !important; }
+    .book-body .verse-num { font-family: 'Plus Jakarta Sans', sans-serif; font-size: 0.6em; font-weight: 700; color: #a8651b; vertical-align: super; margin-right: 0.3em; }
+    .book-body .verse.is-current { background: linear-gradient(90deg, rgba(212,160,60,0.24), rgba(212,160,60,0)); border-left: 3px solid #c58a2a; padding: 2px 0 2px 8px; margin-left: -11px; }
+    /* La palabra que se narra: como un resaltador sobre papel. !important porque
+       word-active existe en la hoja del proyecto, pensada para fondo oscuro
+       (texto ámbar sobre ámbar: ilegible sobre pergamino, visto en el Turno 17). */
+    .book-body .word-active { background: rgba(214,158,46,0.55) !important; color: #1d1307 !important; border-radius: 4px; padding: 0 2px; box-shadow: 0 0 0 1px rgba(150,100,20,0.25); }
+    .book-folio { margin-top: auto !important; padding-top: 16px; text-align: center; font-family: 'Cinzel', serif; font-size: 0.65rem; letter-spacing: 0.2em; color: #9a7a4a; }
+    #book-page-left .book-folio::before { content: "\2014  1  \2014"; }
+    #book-page-right .book-folio::before { content: "\2014  2  \2014"; }
+    .reflection { margin-top: 14px; padding-top: 10px; border-top: 1px solid rgba(138,106,58,0.35); }
+    .reflection-label { font-family: 'Cinzel', serif; font-size: 0.62rem; letter-spacing: 0.16em; text-transform: uppercase; color: #8a6a3a; margin-bottom: 4px; }
+    .reflection p { font-family: 'EB Garamond', Georgia, serif; font-style: italic; font-size: 1.08rem; line-height: 1.5; color: #5a4326; }
+
+    /* --- invitación a tocar el pasaje --- */
+    .book-wrap .book-tap-btn {
+      display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%;
+      border: 1.5px dashed rgba(140,95,35,0.55); border-radius: 10px; padding: 10px 12px; margin-bottom: 14px;
+      color: #7a5322; font-family: 'Plus Jakarta Sans', sans-serif; font-weight: 700; font-size: 0.7rem;
+      letter-spacing: 0.08em; text-transform: uppercase; background: rgba(255,255,255,0.2);
+    }
+    .book-body.tappable { cursor: pointer; }
+
+    /* --- la lámina (el Visor): una ilustración impresa en la página --- */
+    .plate { margin: 0; }
+    .plate-art { position: relative; width: 100%; aspect-ratio: 1200 / 725; }
+    .plate-caption { margin-top: 4px; text-align: center; font-family: 'Cinzel', serif; font-size: 0.66rem; letter-spacing: 0.1em; color: #7a5a2a; }
+    .plate-controls { margin-top: 12px; display: flex; flex-direction: column; gap: 12px; }
+    .plate-track { position: relative; height: 5px; border-radius: 3px; background: rgba(90,60,25,0.25); }
+    .plate-fill { position: absolute; top: 0; bottom: 0; left: 0; width: 0; border-radius: 3px; background: linear-gradient(90deg, #b8862f, #e0b043); transition: width 0.6s ease; }
+    .plate-row { display: flex; align-items: center; justify-content: center; gap: 18px; }
+    .book-wrap .plate-btn { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #5a3a1e; }
+    .book-wrap .plate-btn:active { background: rgba(90,60,25,0.12); }
+    .book-wrap .plate-play {
+      width: 54px; height: 54px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #2e1c0d;
+      background: radial-gradient(circle at 35% 30%, #efc15a, #b07a1c);
+      box-shadow: 0 4px 12px rgba(80,50,10,0.45), inset 0 1px 0 rgba(255,255,255,0.45);
+    }
+    .book-wrap .book-corner-btn {
+      position: absolute; top: -14px; right: 16px; z-index: 5; width: 42px; height: 42px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center; color: #2e1c0d;
+      background: radial-gradient(circle at 35% 30%, #efc15a, #b07a1c); box-shadow: 0 4px 10px rgba(0,0,0,0.45);
+    }
+    .book-toast {
+      position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 60; max-width: 86vw;
+      background: rgba(30,20,8,0.94); color: #f3e3bd; padding: 10px 16px; border-radius: 10px;
+      font-family: 'Plus Jakarta Sans', sans-serif; font-size: 0.8rem; text-align: center;
+      opacity: 0; pointer-events: none; transition: opacity 0.3s;
+    }
+    .book-toast.show { opacity: 1; }
+
+    /* --- efecto portal: las letras se desmaterializan, el texto nuevo se materializa --- */
+    .dissolve-letter { display: inline-block; transition: transform 0.6s ease-in, opacity 0.6s ease-in; }
+    @keyframes materialize { from { opacity: 0; filter: blur(4px); transform: translateY(6px); } to { opacity: 1; filter: blur(0); transform: none; } }
+    .materialize { animation: materialize 0.8s ease-out both; }
     @media (prefers-reduced-motion: reduce) {
-      .book-page.page-turning { animation: none; }
+      .dissolve-letter { transition: opacity 0.2s linear; }
+      .materialize { animation: none; }
     }
-    /* NUEVO Turno 17: efecto "portal" al tocar para iniciar la inmersión
-       — cada letra del texto se envuelve en su propio <span> (ver
-       AppController._disintegrate) y se anima con esta transición; el
-       desplazamiento/giro/momento exactos los pone JS al azar por letra,
-       aquí solo vive la transición en sí. Investigado antes de escribir
-       esto (ver DCM, Turno 16): es la misma idea de fondo que las
-       demos de "texto que se desintegra", pero sin ninguna librería
-       nueva ni conversión DOM→canvas de por medio. */
-    .dissolve-letter {
-      display: inline-block;
-      transition: transform 0.6s ease-in, opacity 0.6s ease-in;
-      will-change: transform, opacity;
+
+    /* (VA AL FINAL a propósito: gana por orden a las reglas base de arriba.)
+       Teléfono girado (horizontal, poca altura): el libro cabe en la pantalla, sin
+       encabezado; cada página se desplaza por dentro si su texto es largo, y la
+       lámina se achica para que la página derecha quepa con sus controles. */
+    @media (orientation: landscape) and (max-height: 520px) {
+      .app-header { display: none !important; }
+      main { padding-top: 6px !important; padding-bottom: 6px !important; }
+      .book-wrap { padding-top: 14px; }
+      .book-cover { padding: 7px; }
+      .book-spread { height: calc(100vh - 52px); height: calc(100dvh - 52px); }
+      .book-page { overflow-y: auto; padding: 14px 16px 10px; scrollbar-width: thin; }
+      .book-body { font-size: 1.05rem !important; line-height: 1.5 !important; }
+      .book-title { font-size: 1.15rem !important; }
+      .book-rule { margin: 6px auto 10px; }
+      .book-wrap .book-tap-btn { padding: 7px 10px; margin-bottom: 10px; }
+      .plate-art { width: min(100%, calc((100vh - 185px) * 1.655)); margin: 0 auto; }
+      .plate-controls { margin-top: 6px; gap: 6px; }
+      .book-wrap .plate-play { width: 44px; height: 44px; }
+      .book-folio { display: none; }
     }
   </style>
 </head>
@@ -134,7 +166,7 @@
         <h2 class="text-2xl font-cinzel font-bold text-white mt-1">Activar Experiencia 3D</h2>
         <p class="text-sm text-slate-300 mt-2 leading-relaxed">
           Los navegadores exigen un gesto del usuario para activar audio. Al presionar el botón se
-          inicia el ambiente sonoro (sintetizado, sin descargas) y la narración.
+          activa el ambiente sonoro (sintetizado, sin descargas); la narración empieza cuando toques el pasaje.
         </p>
       </div>
       <button
@@ -147,7 +179,7 @@
     </div>
   </div>
 
-  <header class="glass-panel border-b border-slate-800 px-6 py-4 flex items-center justify-between z-10">
+  <header class="app-header glass-panel border-b border-slate-800 px-6 py-4 flex items-center justify-between z-10">
     <div class="flex items-center space-x-4">
       <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-amber-500 to-cyan-600 flex items-center justify-center text-slate-950 font-bold text-xl shadow-md">
         <i class="fa-solid fa-cross"></i>
@@ -159,70 +191,71 @@
     </div>
   </header>
 
-  <!-- REDISEÑO Turno 17 (reemplaza el Turno 11/14): ya no hay una barra
-       de controles ni una escena aparte antes del libro — ambas viven
-       DENTRO de él, como pediste. Página izquierda: encabezado de
-       capítulo + versículo narrado + reflexión + el botón que arranca
-       la inmersión. Página derecha: el Visor 3D con sus controles
-       encima, como parte de la página, no como una barra externa. -->
+  <!-- LIBRO LITERAL (Turno 18). Al cargar solo se ve el pasaje repartido en las dos
+       páginas, como un libro normal; el Visor NO se ve. Al tocar el texto, las
+       letras se desmaterializan y en su lugar aparece la lámina ilustrada, con
+       la narración y el texto resaltado en la página izquierda.
+       data-mode="reading" | "immersion" lo cambia AppController. -->
   <main class="flex-grow flex flex-col p-4 lg:p-6 max-w-4xl w-full mx-auto">
-
-    <div class="book-wrap">
+    <div id="book-wrap" class="book-wrap" data-mode="reading">
+      <button id="btn-landscape" class="book-corner-btn" aria-label="Ver el libro abierto en horizontal" title="Ver el libro abierto en horizontal">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="9" width="13" height="9" rx="1.8"/><path d="M13 4.2a6 6 0 0 1 6.3 3.1M19.6 3.6v3.8h-3.8"/></svg>
+      </button>
       <div class="book-cover">
         <div class="book-spread">
-          <div id="book-page-left" class="book-page book-page-left">
-            <div class="book-page-inner">
-              <h2 class="font-cinzel font-bold text-stone-800 text-xl leading-tight">San Marcos<br class="lg:hidden">4:35&ndash;41</h2>
-              <div class="book-heading-rule"></div>
-              <!-- Antes mostraba los 5 versículos en una caja con scroll; ahora
-                   solo el que se está narrando (pedido explícito del Turno 9). -->
-              <div id="scripture-container" class="text-base leading-relaxed text-stone-800"></div>
-              <div class="book-label mt-4">Reflexión</div>
-              <p id="exegesis-text" class="text-sm text-stone-600 italic leading-relaxed"></p>
-              <button id="btn-start-immersion" class="book-tap-btn">
-                <i class="fa-solid fa-hand-pointer"></i>
-                <span>Toca para la inmersión 3D</span>
-              </button>
+
+          <section id="book-page-left" class="book-page" aria-label="Página izquierda">
+            <p class="book-running">Evangelio según San Marcos</p>
+            <h2 class="book-title">Jesús calma la tempestad</h2>
+            <div class="book-rule"></div>
+            <button id="btn-start-immersion" class="book-tap-btn only-reading">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.8" opacity="0.7"/></svg>
+              <span>Toca el pasaje para la inmersión 3D</span>
+            </button>
+            <div id="page-left-body" class="book-body"></div>
+            <div class="reflection only-immersion">
+              <div class="reflection-label">Reflexión</div>
+              <p id="exegesis-text"></p>
             </div>
-          </div>
+            <div class="book-folio"></div>
+          </section>
+
           <div class="book-spine" aria-hidden="true"></div>
-          <div id="book-page-right" class="book-page book-page-right">
-            <div class="book-page-inner book-scene-frame">
-              <div class="book-scene-inner">
-                <div id="three-canvas-container" class="w-full h-full"></div>
-                <div class="absolute top-2 left-2 z-10">
-                  <span id="scene-state-badge" class="px-3 py-1.5 rounded-full text-xs font-semibold bg-blue-900/80 text-blue-200 border border-blue-500/40 backdrop-blur-md flex items-center space-x-2 w-max">
-                    <span class="w-2 h-2 rounded-full bg-blue-400 animate-ping"></span>
-                    <span id="scene-state-text">Escena 1: Tempestad Embravecida</span>
-                  </span>
-                </div>
-                <div class="book-mini-controls">
-                  <div class="relative w-full h-1.5 bg-white/20 rounded-full">
-                    <div id="timeline-progress" class="absolute top-0 left-0 h-full bg-gradient-to-r from-amber-500 to-cyan-400 rounded-full w-0"></div>
-                  </div>
-                  <div class="flex items-center justify-center space-x-4">
-                    <button id="btn-rewind" aria-label="Versículo anterior" class="p-2 text-white/70 hover:text-white rounded-full hover:bg-white/10">
-                      <i class="fa-solid fa-backward-step"></i>
-                    </button>
-                    <button id="btn-play-pause" aria-label="Reproducir o pausar" class="w-11 h-11 rounded-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold flex items-center justify-center shadow-lg shadow-amber-500/20">
-                      <i class="fa-solid fa-play text-lg ml-0.5" id="play-icon"></i>
-                    </button>
-                    <button id="btn-forward" aria-label="Versículo siguiente" class="p-2 text-white/70 hover:text-white rounded-full hover:bg-white/10">
-                      <i class="fa-solid fa-forward-step"></i>
-                    </button>
-                  </div>
-                </div>
+
+          <section id="book-page-right" class="book-page" aria-label="Página derecha">
+            <div id="page-right-body" class="book-body only-reading"></div>
+            <figure id="visor-plate" class="plate only-immersion">
+              <div id="three-canvas-container" class="plate-art"></div>
+              <figcaption class="plate-caption"><span id="scene-state-text">Escena 1: Tempestad Embravecida</span></figcaption>
+            </figure>
+            <div class="plate-controls only-immersion">
+              <div class="plate-track"><div id="timeline-progress" class="plate-fill"></div></div>
+              <div class="plate-row">
+                <button id="btn-rewind" class="plate-btn" aria-label="Versículo anterior">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 5h2v14H6zM9.5 12l9 7V5z"/></svg>
+                </button>
+                <button id="btn-play-pause" class="plate-play" aria-label="Reproducir o pausar">
+                  <svg id="play-icon" width="26" height="26" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path id="play-icon-path" d="M8 5v14l11-7z"/></svg>
+                </button>
+                <button id="btn-forward" class="plate-btn" aria-label="Versículo siguiente">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16 5h2v14h-2zM14.5 12l-9 7V5z"/></svg>
+                </button>
+                <button id="btn-close-visor" class="plate-btn" aria-label="Volver a leer el texto" title="Volver a leer el texto">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 5.5C4 4.7 4.7 4 5.5 4H11v15H5.5A1.5 1.5 0 0 1 4 17.5zM20 5.5c0-.8-.7-1.5-1.5-1.5H13v15h5.5a1.5 1.5 0 0 0 1.5-1.5z"/></svg>
+                </button>
               </div>
             </div>
-          </div>
+            <div class="book-folio"></div>
+          </section>
+
         </div>
       </div>
     </div>
-
+    <div id="book-toast" class="book-toast" role="status" aria-live="polite"></div>
   </main>
 
   <footer class="glass-panel border-t border-slate-800 px-6 py-3 text-[10px] text-slate-500 flex flex-col gap-1 z-10 leading-snug">
-    <span>Motor Web Audio + Web Speech API + Three.js — síntesis 100% local</span>
+    <span>Motor Web Audio + Web Speech API + WebGL — síntesis 100% local</span>
     <span id="scripture-attribution"></span>
   </footer>
 
