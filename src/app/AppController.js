@@ -105,21 +105,71 @@
 //   perícopa de verdad, para poder repetirla.
 // - _showVerse: el color de la línea de referencia pasó de slate-500 a
 //   stone-500 (la página ahora es pergamino claro, no oscura).
+//
+// CAMBIOS TURNO 18 (el Visor pasa a ser una LÁMINA ILUSTRADA del libro):
+// - Dos modos, en data-mode del #book-wrap: "reading" (al cargar: solo el
+//   pasaje repartido en las dos páginas, como un libro normal; el Visor
+//   NO se ve) e "immersion" (la lámina ilustrada en la página derecha, el
+//   texto completo en la izquierda con el versículo y la palabra
+//   narrados resaltados, y la reflexión de cada versículo).
+// - Tocar el pasaje (o el botón de invitación) dispara _startImmersion():
+//   las letras de AMBAS páginas se desmaterializan (_disintegrate), y a
+//   los ~750 ms el texto se re-materializa en la izquierda mientras la
+//   lámina se revela en la derecha con un anillo dorado (scene.reveal) y
+//   arranca la narración. "Volver a leer" (btn-close-visor) hace el camino
+//   de vuelta.
+// - La escena ahora es IllustratedScene (WebGL directo, sin Three.js):
+//   misma interfaz que Scene3D (render / snapToStage / triggerLightning)
+//   más reveal() / resetReveal(). Scene3D.js queda en el repo como
+//   respaldo histórico, pero ya NADA lo importa. La propiedad se sigue
+//   llamando scene3D para no renombrar por renombrar.
+// - Se quitó el efecto de "pasar la página" por versículo
+//   (_playPageTurn): el texto ya no se intercambia al avanzar, solo se
+//   mueve el resaltado. Volverá cuando haya navegación entre páginas.
+// - CODE REVIEW INTERNO (paso nuevo de la metodología), hallazgos
+//   corregidos aquí: (1) play() ahora ignora una segunda llamada mientras
+//   ya está reproduciendo (dos toques seguidos arrancaban dos
+//   speakSequence y dos bucles de animación); (2) _jumpToVerse con la
+//   pausa activa no reanudaba el ambiente (la voz hablaba sobre un
+//   ambiente suspendido); (3) _disintegrate programaba una animación por
+//   letra: ahora todas comparten un solo requestAnimationFrame, y respeta
+//   prefers-reduced-motion; (4) el temporizador de arranque de la
+//   inmersión se cancela si se pausa o se sale antes de que dispare.
+// - Opción "horizontal" (btn-landscape): pantalla completa + bloqueo de
+//   orientación donde el navegador lo permita; si no, avisa que gires el
+//   teléfono. Con el teléfono girado, el CSS pone las dos páginas lado a
+//   lado.
+
 
 import { AmbientAudioEngine } from '../audio/AudioEngine.js';
 import { VoiceEngine } from '../audio/VoiceEngine.js';
-import { Scene3D } from '../scene/Scene3D.js';
-import {
-  SCRIPTURE_PERICOPE,
-  SCRIPTURE_REFERENCE,
-  SCRIPTURE_ATTRIBUTION,
-} from '../data/scripture.js';
+import { IllustratedScene } from '../scene/IllustratedScene.js';
+import { ILLUSTRATIONS } from '../data/illustrations.js';
+import { SCRIPTURE_PERICOPE, SCRIPTURE_ATTRIBUTION } from '../data/scripture.js';
+
+// Identificador del pasaje piloto — clave en ILLUSTRATIONS. Cuando haya
+// más pasajes, saldrá del libro/capítulo que esté abierto.
+const PASSAGE_ID = 'mk-4-35-41';
+const PLAY_PATH = 'M8 5v14l11-7z';
+const PAUSE_PATH = 'M6 5h4v14H6zM14 5h4v14h-4z';
+
 
 export class AppController {
   constructor() {
     this.ambient = new AmbientAudioEngine();
     this.voice = new VoiceEngine({ lang: 'es-ES' });
-    this.scene3D = new Scene3D(document.getElementById('three-canvas-container'));
+    // Sigue llamándose scene3D por no renombrar; desde el Turno 18 es la
+    // lámina ilustrada (IllustratedScene), con la misma interfaz.
+    this.scene3D = new IllustratedScene(
+      document.getElementById('three-canvas-container'),
+      ILLUSTRATIONS[PASSAGE_ID]
+    );
+
+    this.mode = 'reading';
+    this._transitioning = false;
+    this._verseEls = [];
+    this._introTimer = null;
+    this._toastTimer = null;
 
     this.currentVerseIndex = -1;
     this.currentStage = 'storm-building';
@@ -131,23 +181,17 @@ export class AppController {
     this._currentElapsed = 0;
     // Último índice de versículo narrado — para que onVerseStart pueda
     // distinguir avance natural de un salto que necesita corte duro en
-    // Scene3D (ver cabecera, Turno 12). -1 = todavía no narró nada.
+    // la escena (ver cabecera, Turno 12). -1 = todavía no narró nada.
     this._lastNarratedIndex = -1;
-    // Turno 14: último versículo MOSTRADO en el libro (no narrado) —
-    // para disparar el efecto de pasar página solo cuando el contenido
-    // realmente cambia, no cuando _showVerse se repite por el mismo
-    // versículo (pausa/resume, ver Turno 12).
-    this._lastShownVerseIndex = -1;
 
-    this.scriptureEl = document.getElementById('scripture-container');
+    this.bookEl = document.getElementById('book-wrap');
+    this.leftBodyEl = document.getElementById('page-left-body');
+    this.rightBodyEl = document.getElementById('page-right-body');
+    this.exegesisEl = document.getElementById('exegesis-text');
     this.stageLabelEl = document.getElementById('scene-state-text');
     this.progressEl = document.getElementById('timeline-progress');
-    this.playIcon = document.getElementById('play-icon');
-    this.exegesisEl = document.getElementById('exegesis-text');
-    this._bookPageLeftEl = document.getElementById('book-page-left');
-    this._bookPageRightEl = document.getElementById('book-page-right');
-    // Turno 17: botón "toca para la inmersión 3D" en la página
-    // izquierda — ver _startImmersion() más abajo.
+    this.playIconPath = document.getElementById('play-icon-path');
+    this.toastEl = document.getElementById('book-toast');
     this._startBtn = document.getElementById('btn-start-immersion');
 
     // El aviso de derechos es obligatorio para poder usar RVR1960 sin
@@ -158,89 +202,134 @@ export class AppController {
 
     this._wireVoiceEvents();
     this._wireControls();
-
-    // Turno 17: antes, la página izquierda quedaba vacía hasta que
-    // play() arrancaba de verdad — ahora el libro debe mostrar el primer
-    // versículo y su reflexión DESDE que carga, para que haya algo que
-    // leer y tocar antes de iniciar la inmersión. isRealChange sale
-    // false aquí (aún no hay "último mostrado"), así que no dispara
-    // ningún efecto de pasar página — es solo la primera pintura.
-    this._showVerse(0);
-    // Primer cuadro estático de la escena (tormenta, quieta) para que la
-    // página derecha no se vea negra/vacía antes de tocar inmersión —
-    // sin esto, render() nunca se había llamado ni una vez (solo lo
-    // llama _startAnimLoop, y eso solo arranca con play()).
-    this.scene3D.render(0, this.currentStage);
+    this._enterReadingLayout();
   }
 
-  // Reemplaza TODO el contenido del panel por el versículo `index` — ya
-  // no se arma una lista con los 5 versículos de una vez (ver cabecera).
-  _showVerse(index) {
-    const v = SCRIPTURE_PERICOPE[index];
-    if (!v || !this.scriptureEl) return;
-
-    // Turno 14: ¿es un versículo distinto al último que se MOSTRÓ, y ya
-    // había uno mostrado antes? Si sí, vale la pena "pasar la página" —
-    // si no (primera vez, o el mismo versículo repitiéndose por una
-    // pausa), no: no hay página anterior que pasar, o no cambió nada.
-    const isRealChange = this._lastShownVerseIndex !== -1 && index !== this._lastShownVerseIndex;
-    this._lastShownVerseIndex = index;
-
-    this.scriptureEl.innerHTML = '';
-
-    const refEl = document.createElement('p');
-    refEl.className = 'text-xs text-stone-500 mb-2';
-    refEl.textContent = SCRIPTURE_REFERENCE;
-
-    const verseP = document.createElement('p');
-    const num = document.createElement('span');
-    num.className = 'text-xs font-bold text-amber-500 font-mono mr-2 select-none align-top';
-    num.textContent = `v.${v.verse}`;
-    const textSpan = document.createElement('span');
-    textSpan.textContent = v.text;
-    verseP.appendChild(num);
-    verseP.appendChild(textSpan);
-
-    this.scriptureEl.appendChild(refEl);
-    this.scriptureEl.appendChild(verseP);
-
-    this._currentVerseSpan = textSpan;
-    this._currentVerseRaw = v.text;
-
-    if (this.exegesisEl) this.exegesisEl.textContent = v.exegesis || '';
-
-    if (isRealChange) this._playPageTurn();
-  }
-
-  // Turno 14 (Fase 3): dispara brevemente la clase CSS "page-turning" en
-  // las dos páginas del libro (ver <style> en index.html) — un giro
-  // breve sobre el lomo con una sombra pasajera, no una simulación
-  // física de curvar la hoja. Se quita y se vuelve a poner (con un
-  // reflow forzado en medio) para poder repetirse aunque el versículo
-  // cambie antes de que la animación anterior termine.
-  _playPageTurn() {
-    [this._bookPageLeftEl, this._bookPageRightEl].forEach((el) => {
-      if (!el) return;
-      el.classList.remove('page-turning');
-      void el.offsetWidth; // fuerza el reflow — sin esto, quitar y poner
-                           // la misma clase en el mismo tick no reinicia
-                           // la animación, el navegador la ignora.
-      el.classList.add('page-turning');
+  // ---------- Modo lectura: el pasaje en las dos páginas ----------
+  // Crea un <p> por versículo (número + texto). Se reconstruyen desde los
+  // datos cada vez que se cambia de modo — _disintegrate destruye el
+  // interior de los párrafos, así que no se reutilizan.
+  _buildVerses() {
+    this._verseEls = SCRIPTURE_PERICOPE.map((v) => {
+      const p = document.createElement('p');
+      p.className = 'verse';
+      const num = document.createElement('span');
+      num.className = 'verse-num';
+      num.textContent = String(v.verse);
+      const text = document.createElement('span');
+      text.className = 'verse-text';
+      text.textContent = v.text;
+      p.appendChild(num);
+      p.appendChild(document.createTextNode(' '));
+      p.appendChild(text);
+      return { p, text };
     });
+    this._currentVerseSpan = null;
+    this._currentVerseRaw = '';
   }
 
-  // Turno 17: lo que dispara el botón "Toca para la inmersión 3D" de la
-  // página izquierda. Primero el adorno visual (desintegrar lo que ya
-  // está en pantalla), y solo después play() de verdad — el mismo
-  // play() de siempre, sin ninguna lógica nueva de reproducción aquí.
-  // El retraso (650ms) le da tiempo a la animación de letras a
-  // terminar de verse antes de que _showVerse() vuelva a escribir el
-  // panel con el primer versículo real.
+  // reading: los primeros versículos en la página izquierda (que además lleva
+  // el título) y el resto en la derecha, como un libro que continúa de una
+  // página a la otra. immersion: todo el pasaje en la izquierda; la derecha
+  // es la lámina.
+  _layoutVerses(mode) {
+    this.leftBodyEl.replaceChildren();
+    this.rightBodyEl.replaceChildren();
+    const n = this._verseEls.length;
+    const k = mode === 'reading' ? Math.max(1, Math.floor(n / 2)) : n;
+    this._verseEls.forEach((e, i) => (i < k ? this.leftBodyEl : this.rightBodyEl).appendChild(e.p));
+  }
+
+  _enterReadingLayout() {
+    this.mode = 'reading';
+    this.bookEl.dataset.mode = 'reading';
+    this._buildVerses();
+    this._layoutVerses('reading');
+    [this.leftBodyEl, this.rightBodyEl].forEach((el) => el.classList.add('tappable'));
+  }
+
+  // ---------- Transición lectura -> inmersión ("portal") ----------
+  // El gesto del usuario (tocar el pasaje) primero desmaterializa las
+  // letras, y solo después cambia el libro de modo y arranca la narración
+  // — el play() de siempre, sin lógica nueva de reproducción aquí.
   _startImmersion() {
-    if (this._startBtn) this._startBtn.classList.add('hidden');
-    this._disintegrate(this.scriptureEl);
-    if (this.exegesisEl) this._disintegrate(this.exegesisEl);
-    setTimeout(() => this.play(), 650);
+    if (this.mode !== 'reading' || this._transitioning) return;
+    this._transitioning = true;
+    this._disintegrate(this.leftBodyEl);
+    this._disintegrate(this.rightBodyEl);
+    setTimeout(() => this._enterImmersionLayout(), 750);
+  }
+
+  _enterImmersionLayout() {
+    this.mode = 'immersion';
+    this.bookEl.dataset.mode = 'immersion';
+    [this.leftBodyEl, this.rightBodyEl].forEach((el) => el.classList.remove('tappable'));
+    this._buildVerses();
+    this._layoutVerses('immersion');
+    this._restartAnimation(this.leftBodyEl, 'materialize');
+    // En vertical la lámina queda arriba: llevar el libro a la vista (el
+    // toque pudo ser en la página de abajo y el diseño acaba de cambiar).
+    this.bookEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    this.currentStage = 'storm-building';
+    this.currentVerseIndex = -1;
+    this._lastNarratedIndex = -1;
+    this.scene3D.snapToStage(this.currentStage);
+    this.scene3D.resetReveal();
+    this.scene3D.reveal(1700);
+    this._updateStageLabel(this.currentStage);
+    this._updateProgress();
+    if (this.exegesisEl) this.exegesisEl.textContent = SCRIPTURE_PERICOPE[0].exegesis || '';
+    this._transitioning = false;
+
+    clearTimeout(this._introTimer);
+    this._introTimer = setTimeout(() => {
+      this._introTimer = null;
+      if (this.mode === 'immersion') this.play();
+    }, 600);
+  }
+
+  // Camino de vuelta: "Volver a leer el texto".
+  _exitImmersion() {
+    if (this.mode !== 'immersion') return;
+    clearTimeout(this._introTimer);
+    this._introTimer = null;
+    this.pause();
+    this.currentVerseIndex = -1;
+    this._lastNarratedIndex = -1;
+    this.scene3D.resetReveal();
+    this._enterReadingLayout();
+    this._restartAnimation(this.leftBodyEl, 'materialize');
+    this._restartAnimation(this.rightBodyEl, 'materialize');
+    this.bookEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  // Reinicia una animación CSS aunque la clase ya estuviera puesta.
+  _restartAnimation(el, cls) {
+    el.classList.remove(cls);
+    void el.offsetWidth; // fuerza el reflow: sin esto el navegador ignora el quitar+poner
+    el.classList.add(cls);
+  }
+
+  // Muestra el versículo `index` como el actual: lo marca, deja el resto
+  // como texto plano y pone su reflexión. Solo en modo inmersión.
+  _showVerse(index) {
+    if (this.mode !== 'immersion') return;
+    const v = SCRIPTURE_PERICOPE[index];
+    const entry = this._verseEls[index];
+    if (!v || !entry) return;
+    if (this._currentVerseSpan) this._currentVerseSpan.textContent = this._currentVerseRaw;
+    this._verseEls.forEach((e, i) => e.p.classList.toggle('is-current', i === index));
+    this._currentVerseSpan = entry.text;
+    this._currentVerseRaw = v.text;
+    this._currentVerseSpan.textContent = v.text;
+    if (this.exegesisEl) this.exegesisEl.textContent = v.exegesis || '';
+    // Con las páginas lado a lado cada una se desplaza por dentro: llevar el
+    // versículo actual a la vista. En vertical NO: la lámina está arriba y
+    // desplazar la pantalla la sacaría de la vista mientras se narra.
+    if (window.matchMedia && window.matchMedia('(orientation: landscape) and (min-width: 640px)').matches) {
+      entry.p.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
   }
 
   // Envuelve cada carácter visible de `container` en su propio <span
@@ -254,10 +343,12 @@ export class AppController {
   // sorpresas en Android/Samsung Browser (Turnos 7, 12, 13).
   _disintegrate(container) {
     if (!container) return;
+    const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
     const textNodes = [];
     let node;
     while ((node = walker.nextNode())) textNodes.push(node);
+    const items = [];
     textNodes.forEach((textNode) => {
       const frag = document.createDocumentFragment();
       [...textNode.textContent].forEach((ch) => {
@@ -268,34 +359,61 @@ export class AppController {
         const span = document.createElement('span');
         span.className = 'dissolve-letter';
         span.textContent = ch;
-        const dx = (Math.random() - 0.5) * 50;
-        const dy = -15 - Math.random() * 45;
-        const rot = (Math.random() - 0.5) * 70;
         span.style.transitionDelay = `${Math.random() * 200}ms`;
-        // requestAnimationFrame: si se pusiera el transform ya mismo,
-        // en el mismo cuadro en que el span entra al DOM, el navegador
-        // no tiene un estado "antes" del que animar y salta directo al
-        // final — sin transición visible.
-        requestAnimationFrame(() => {
-          span.style.transform = `translate(${dx}px, ${dy}px) rotate(${rot}deg)`;
-          span.style.opacity = '0';
+        items.push({
+          span,
+          dx: (Math.random() - 0.5) * 50,
+          dy: -15 - Math.random() * 45,
+          rot: (Math.random() - 0.5) * 70,
         });
         frag.appendChild(span);
       });
       textNode.parentNode.replaceChild(frag, textNode);
     });
+    // Un solo requestAnimationFrame para todas las letras: si el
+    // transform se pusiera en el mismo cuadro en que el span entra al
+    // DOM, el navegador no tendría un estado "antes" del que animar y
+    // saltaría directo al final.
+    requestAnimationFrame(() => {
+      items.forEach(({ span, dx, dy, rot }) => {
+        if (!reduce) span.style.transform = `translate(${dx}px, ${dy}px) rotate(${rot}deg)`;
+        span.style.opacity = '0';
+      });
+    });
   }
 
-  _escape(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
+  _toast(msg) {
+    if (!this.toastEl) return;
+    this.toastEl.textContent = msg;
+    this.toastEl.classList.add('show');
+    clearTimeout(this._toastTimer);
+    this._toastTimer = setTimeout(() => this.toastEl.classList.remove('show'), 3200);
+  }
+
+  // "Ver el libro abierto en horizontal": pantalla completa + bloqueo de
+  // orientación donde el navegador lo permita (Chrome/Samsung Internet en
+  // Android sí, con un gesto del usuario; iPhone no). Si algo falla, el
+  // aviso de girar el teléfono sigue siendo válido: el CSS reacciona a la
+  // orientación, no a este botón.
+  async _toggleLandscape() {
+    try {
+      if (document.fullscreenElement) {
+        if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock();
+        await document.exitFullscreen();
+        return;
+      }
+      if (!document.documentElement.requestFullscreen) throw new Error('sin pantalla completa');
+      await document.documentElement.requestFullscreen();
+      if (screen.orientation && screen.orientation.lock) await screen.orientation.lock('landscape');
+    } catch (err) {
+      this._toast('Gira tu teléfono para ver el libro abierto.');
+    }
   }
 
   // Resalta la palabra activa usando el charIndex real que entrega el
-  // evento 'boundary' del navegador (cuando está disponible). Como ahora
-  // solo se muestra un versículo a la vez, basta con comparar que el
-  // evento sea del versículo que está en pantalla.
+  // evento 'boundary' del navegador (o el estimado de VoiceEngine).
+  // Solo se resalta dentro del versículo actual: basta con comparar que
+  // el evento sea de ese versículo.
   _highlightAtCharIndex(verseIndex, charIndex) {
     if (verseIndex !== this.currentVerseIndex || !this._currentVerseSpan) return;
     const text = this._currentVerseRaw;
@@ -303,10 +421,18 @@ export class AppController {
     const wordMatch = text.slice(charIndex).match(/^\S+/);
     const word = wordMatch ? wordMatch[0] : '';
     const after = text.slice(charIndex + word.length);
+    // guardian-ok(inner-html): before/word/after pasan por _escape() (textContent a innerHTML) antes de insertarse
     this._currentVerseSpan.innerHTML =
       this._escape(before) +
       '<span class="word-active">' + this._escape(word) + '</span>' +
       this._escape(after);
+  }
+
+
+  _escape(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
   }
 
   // Dispara rayo + trueno. Antes de este arreglo, existían las funciones
@@ -355,7 +481,7 @@ export class AppController {
       // siguiente natural" de la historia? Si no es ninguno de los dos,
       // es un salto (reinicio tras el final, o botón anterior/siguiente
       // cruzando hacia atrás) y la escena necesita un corte, no una
-      // transición — ver Turno 12 arriba y en Scene3D.js.
+      // transición — ver Turno 12 arriba y en IllustratedScene.js.
       const isContinuation =
         index === this._lastNarratedIndex || index === this._lastNarratedIndex + 1;
       if (!isContinuation) this.scene3D.snapToStage(stage);
@@ -393,10 +519,6 @@ export class AppController {
       }
       this.pause();
       this.currentVerseIndex = -1;
-      // Turno 17: si de verdad se acabó la perícopa (no un stop()
-      // manual, ya descartado arriba), vuelve a aparecer el botón de
-      // inmersión para poder repetir la experiencia desde el principio.
-      if (this._startBtn) this._startBtn.classList.remove('hidden');
     };
   }
 
@@ -421,11 +543,9 @@ export class AppController {
     const initBtn = document.getElementById('btn-init-audio');
     if (initBtn) {
       initBtn.addEventListener('click', () => {
-        // Turno 17: antes esto llamaba a play() directamente — con el
-        // libro nuevo, este botón solo debe habilitar el audio (gesto
-        // del usuario, exigido por el navegador) y cerrar el modal; el
-        // que de verdad arranca la inmersión es btn-start-immersion, en
-        // la página izquierda, con su efecto de desintegración.
+        // Este botón solo habilita el audio (gesto del usuario, exigido por
+        // el navegador) y cierra el modal; la narración empieza cuando se
+        // toca el pasaje (Turno 17).
         this.ambient.init();
         const modal = document.getElementById('audio-bridge-modal');
         if (modal) {
@@ -437,9 +557,17 @@ export class AppController {
       });
     }
 
-    if (this._startBtn) {
-      this._startBtn.addEventListener('click', () => this._startImmersion());
-    }
+    // Tocar el pasaje (cualquiera de las dos páginas) o el botón de
+    // invitación inicia la inmersión — solo en modo lectura.
+    const startIfReading = () => this._startImmersion();
+    if (this._startBtn) this._startBtn.addEventListener('click', startIfReading);
+    [this.leftBodyEl, this.rightBodyEl].forEach((el) => el.addEventListener('click', startIfReading));
+
+    const closeBtn = document.getElementById('btn-close-visor');
+    if (closeBtn) closeBtn.addEventListener('click', () => this._exitImmersion());
+
+    const landscapeBtn = document.getElementById('btn-landscape');
+    if (landscapeBtn) landscapeBtn.addEventListener('click', () => this._toggleLandscape());
 
     const playPauseBtn = document.getElementById('btn-play-pause');
     if (playPauseBtn) {
@@ -461,7 +589,11 @@ export class AppController {
   }
 
   _jumpToVerse(index) {
+    if (this.mode !== 'immersion') return;
     const clamped = Math.max(0, Math.min(SCRIPTURE_PERICOPE.length - 1, index));
+    // Si estaba en pausa, el ambiente (que pause() suspendió) también debe
+    // reanudarse — antes la voz hablaba sobre un ambiente en silencio.
+    if (!this.isPlaying) this.ambient.play();
     this.voice.speakSequence(SCRIPTURE_PERICOPE, clamped);
     this.isPlaying = true;
     this._setPlayIcon(true);
@@ -469,6 +601,7 @@ export class AppController {
   }
 
   play() {
+    if (this.isPlaying) return; // evita doble speakSequence / doble bucle
     this.ambient.play();
     this.isPlaying = true;
     this._setPlayIcon(true);
@@ -490,6 +623,8 @@ export class AppController {
   }
 
   pause() {
+    clearTimeout(this._introTimer); // si se pausa antes de que arranque la inmersión, no arrancar
+    this._introTimer = null;
     this.ambient.pause();
     // ✅ CONFIRMADO en el Turno 13 (ver VoiceEngine.js): stop() SÍ podía
     // disparar el "fin de secuencia" por error, porque cancel() dispara
@@ -517,10 +652,8 @@ export class AppController {
   }
 
   _setPlayIcon(playing) {
-    if (!this.playIcon) return;
-    this.playIcon.className = playing
-      ? 'fa-solid fa-pause text-xl'
-      : 'fa-solid fa-play text-xl ml-0.5';
+    if (!this.playIconPath) return;
+    this.playIconPath.setAttribute('d', playing ? PAUSE_PATH : PLAY_PATH);
   }
 
   // ARREGLADO Turno 11: antes `const start = performance.now()` se
