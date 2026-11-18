@@ -193,6 +193,11 @@ export class AppController {
     this.playIconPath = document.getElementById('play-icon-path');
     this.toastEl = document.getElementById('book-toast');
     this._startBtn = document.getElementById('btn-start-immersion');
+    // Modo cine (Turno 19): la lámina grande con subtítulo, solo visible en horizontal.
+    this.cineBtn = document.getElementById('btn-cine');
+    this.cineCaptionEl = document.getElementById('cine-caption');
+    this._cineTextSpan = null;
+    this._cine = true; // por defecto la lámina se ve grande mientras se narra
 
     // El aviso de derechos es obligatorio para poder usar RVR1960 sin
     // pedir permiso escrito (ver comentario en src/data/scripture.js) —
@@ -243,6 +248,7 @@ export class AppController {
   _enterReadingLayout() {
     this.mode = 'reading';
     this.bookEl.dataset.mode = 'reading';
+    this._clearCineCaption();
     this._buildVerses();
     this._layoutVerses('reading');
     [this.leftBodyEl, this.rightBodyEl].forEach((el) => el.classList.add('tappable'));
@@ -263,6 +269,7 @@ export class AppController {
   _enterImmersionLayout() {
     this.mode = 'immersion';
     this.bookEl.dataset.mode = 'immersion';
+    this._applyCine();
     [this.leftBodyEl, this.rightBodyEl].forEach((el) => el.classList.remove('tappable'));
     this._buildVerses();
     this._layoutVerses('immersion');
@@ -304,6 +311,36 @@ export class AppController {
     this.bookEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
+  // ---------- Modo cine (Turno 19) ----------
+  // data-cine="on"|"off" en el libro; el CSS (index.html) hace el resto y solo
+  // en horizontal. El botón de las flechas alterna entre la lámina grande con
+  // subtítulo y el libro de dos páginas con el texto completo.
+  _applyCine() {
+    this.bookEl.dataset.cine = this._cine ? 'on' : 'off';
+    if (this.cineBtn) {
+      const label = this._cine ? 'Ver el libro con el texto' : 'Ver la lámina en pantalla grande';
+      this.cineBtn.setAttribute('aria-pressed', String(this._cine));
+      this.cineBtn.setAttribute('aria-label', label);
+      this.cineBtn.title = label;
+    }
+  }
+
+  _setCineCaption(v) {
+    if (!this.cineCaptionEl) return;
+    const num = document.createElement('span');
+    num.className = 'verse-num';
+    num.textContent = String(v.verse);
+    const txt = document.createElement('span');
+    txt.textContent = v.text;
+    this.cineCaptionEl.replaceChildren(num, document.createTextNode(' '), txt);
+    this._cineTextSpan = txt;
+  }
+
+  _clearCineCaption() {
+    this._cineTextSpan = null;
+    if (this.cineCaptionEl) this.cineCaptionEl.replaceChildren();
+  }
+
   // Reinicia una animación CSS aunque la clase ya estuviera puesta.
   _restartAnimation(el, cls) {
     el.classList.remove(cls);
@@ -324,6 +361,7 @@ export class AppController {
     this._currentVerseRaw = v.text;
     this._currentVerseSpan.textContent = v.text;
     if (this.exegesisEl) this.exegesisEl.textContent = v.exegesis || '';
+    this._setCineCaption(v);
     // Con las páginas lado a lado cada una se desplaza por dentro: llevar el
     // versículo actual a la vista. En vertical NO: la lámina está arriba y
     // desplazar la pantalla la sacaría de la vista mientras se narra.
@@ -426,6 +464,14 @@ export class AppController {
       this._escape(before) +
       '<span class="word-active">' + this._escape(word) + '</span>' +
       this._escape(after);
+    if (this._cineTextSpan) {
+      const hl = document.createElement('span');
+      hl.className = 'word-active';
+      hl.textContent = word;
+      this._cineTextSpan.replaceChildren(
+        document.createTextNode(before), hl, document.createTextNode(after)
+      );
+    }
   }
 
 
@@ -565,6 +611,13 @@ export class AppController {
 
     const closeBtn = document.getElementById('btn-close-visor');
     if (closeBtn) closeBtn.addEventListener('click', () => this._exitImmersion());
+
+    if (this.cineBtn) {
+      this.cineBtn.addEventListener('click', () => {
+        this._cine = !this._cine;
+        this._applyCine();
+      });
+    }
 
     const landscapeBtn = document.getElementById('btn-landscape');
     if (landscapeBtn) landscapeBtn.addEventListener('click', () => this._toggleLandscape());
