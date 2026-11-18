@@ -25,6 +25,17 @@
 // Esquinas/bordes se funden con el papel de la página (alfa), no hay
 // rectángulo negro.
 //
+// TURNO 19 — MÁS MOVIMIENTO (con las mismas dos láminas, sin imágenes nuevas):
+//  7. Cámara: vaivén y giro leves (más en la tormenta), empuje hacia la
+//     escena al crecer la tensión y retirada al llegar la calma.
+//  8. Paralaje de papel recortado: cielo, barca y mar se desplazan distinto.
+//  9. Olas ~3x más amplias y barca que cabecea girando sobre su centro; nubes
+//     que se deslizan y "hierven"; la túnica respira con la brisa.
+// 10. En la bonanza el mar sigue respirando (antes quedaba inmóvil), ondas
+//     más amplias y motas de luz dorada subiendo por los rayos.
+// Ahorro: el ruido de la disolución y del portal solo se calcula mientras
+// están en curso; la lluvia solo mientras llueve.
+//
 // RESPALDO: si el navegador no da WebGL, se usan dos <img> apiladas con
 // fundido de opacidad — sin lluvia ni olas, pero la lámina y la
 // transición siguen ahí.
@@ -55,6 +66,7 @@ uniform float uRays;
 uniform float uRipple;
 uniform float uFlash;
 uniform float uReveal;
+uniform float uMotion;
 
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
 float noise(vec2 p) {
@@ -90,57 +102,130 @@ float rainLayer(vec2 uv, float scale, float speed, float seed) {
 }
 
 void main() {
-  vec2 uv = vUv;
+  vec2 uv = vUv;                 // espacio de pantalla: bordes, portal y lluvia
   vec2 asp = vec2(uAspect, 1.0);
 
+  // --- CÁMARA (Turno 19): la lámina deja de ser un cuadro fijo. Vaivén y giro
+  // leves, más fuertes en la tormenta; la cámara "empuja" hacia la escena
+  // al crecer la tensión y se retira al llegar la calma.
+  float tension = clamp(uRain, 0.0, 1.0);
+  float sway = (0.4 + 0.6 * tension) * uMotion;
+  vec2 cam = vec2(
+    (noise(vec2(uTime * 0.21, 1.7)) - 0.5) * 0.020 + sin(uTime * 0.83) * 0.004 * tension,
+    (noise(vec2(uTime * 0.17, 9.1)) - 0.5) * 0.014 + sin(uTime * 1.21) * 0.005 * tension) * sway;
+  float roll = ((noise(vec2(uTime * 0.15, 4.2)) - 0.5) * 0.030 + sin(uTime * 0.61) * 0.006 * tension) * sway;
+  float zoom = 1.02 + (0.030 * tension + 0.006 * sin(uTime * 0.29)) * uMotion;
+  vec2 pc = (uv - vec2(0.5, 0.56)) * asp;
+  pc = vec2(cos(roll) * pc.x - sin(roll) * pc.y, sin(roll) * pc.x + cos(roll) * pc.y);
+  vec2 iuv = vec2(0.5, 0.56) + (pc / asp) / zoom + cam;   // espacio de la imagen
+
   // --- Máscaras de región (según la composición de las dos láminas) ---
-  float water = smoothstep(0.60, 0.72, uv.y);
-  float boat = 1.0 - smoothstep(0.55, 1.0, length((uv - vec2(0.52, 0.67)) / vec2(0.31, 0.17)));
-  float jesus = 1.0 - smoothstep(0.4, 1.0, length((uv - vec2(0.63, 0.52)) / vec2(0.10, 0.26)));
+  float water = smoothstep(0.60, 0.72, iuv.y);
+  float boat = 1.0 - smoothstep(0.55, 1.0, length((iuv - vec2(0.52, 0.67)) / vec2(0.31, 0.17)));
+  float jesus = 1.0 - smoothstep(0.4, 1.0, length((iuv - vec2(0.63, 0.52)) / vec2(0.10, 0.26)));
+  float sky = 1.0 - smoothstep(0.24, 0.46, iuv.y);
+  // La figura de Jesús (cabeza y torso) sube hasta la zona de nubes: no debe
+  // moverse con ellas, sino con la barca en la que está de pie.
+  float fig = max(jesus, 1.0 - smoothstep(0.5, 1.0, length((iuv - vec2(0.62, 0.30)) / vec2(0.10, 0.18))));
+  sky *= 1.0 - 0.92 * fig;
 
-  // --- Desplazamientos: olas, balanceo, ondas de bonanza, túnica ---
+  // --- Desplazamientos ---
   vec2 d = vec2(0.0);
-  d.x += sin(uv.y * 22.0 + uTime * 1.6) * 0.0022 * water * uWave;
-  d.y += sin(uv.x * 17.0 - uTime * 1.3 + uv.y * 6.0) * 0.0038 * water * uWave;
-  d.y += sin(uTime * 1.15 + uv.x * 4.0) * 0.0050 * boat * uWave;
-  d.x += sin(uTime * 0.9) * 0.0022 * boat * uWave;
-  vec2 rp = (uv - vec2(0.52, 0.80)) * asp * vec2(1.0, 2.2);
+  float W = uWave * uMotion;
+  // Paralaje de papel recortado: el cielo se desplaza menos que la cámara y el mar más.
+  d += cam * (0.30 * water - 0.55 * sky);
+  // Olas: franjas de papel que se deslizan y cabecean.
+  d.x += sin(iuv.y * 26.0 + uTime * 1.5) * 0.0065 * water * W;
+  d.y += sin(iuv.x * 13.0 - uTime * 1.7 + iuv.y * 5.0) * 0.0085 * water * W;
+  d.y += sin(iuv.x * 31.0 + uTime * 2.3) * 0.0030 * water * W;
+  // Barca: cabeceo (giro sobre su centro), subida y bajada, y vaivén.
+  vec2 bp = (iuv - vec2(0.52, 0.70)) * asp;
+  float pitch = (sin(uTime * 1.05) * 0.030 + sin(uTime * 0.47 + 1.3) * 0.012) * W;
+  d += vec2(-bp.y / uAspect, bp.x) * pitch * boat;
+  d.y += sin(uTime * 1.15 + iuv.x * 4.0) * 0.0090 * boat * W;
+  d.x += sin(uTime * 0.9) * 0.0045 * boat * W;
+  // Nubes: se deslizan y "hierven" despacio (más en la tormenta).
+  if (sky > 0.001) {
+    float sm = uMotion * (0.35 + 0.65 * tension);
+    vec2 cn = vec2(iuv.x * 2.2 + uTime * 0.05, iuv.y * 2.6);
+    d.x += (noise(cn + vec2(0.0, uTime * 0.07)) - 0.5) * 0.026 * sky * sm;
+    d.y += (noise(cn * 1.7 + vec2(5.2 - uTime * 0.06, 1.3)) - 0.5) * 0.016 * sky * sm;
+    d.x += sin(uTime * 0.11) * 0.010 * sky * uMotion;
+  }
+  // Ondas concéntricas desde la barca en la bonanza.
+  vec2 rp = (iuv - vec2(0.52, 0.80)) * asp * vec2(1.0, 2.2);
   float rd = length(rp);
-  d.y += sin(rd * 48.0 - uTime * 1.2) * 0.0024 * water * uRipple * smoothstep(1.0, 0.05, rd);
-  d.x += sin(uv.y * 34.0 + uTime * 1.3) * 0.0016 * jesus;
-  vec2 suv = clamp(uv + d, 0.001, 0.999);
+  float rz = water * uRipple * smoothstep(1.0, 0.05, rd) * uMotion;
+  d.y += sin(rd * 48.0 - uTime * 1.3) * 0.0055 * rz;
+  d.x += cos(rd * 40.0 - uTime * 1.1) * 0.0025 * rz;
+  // Túnica de Jesús: la brisa (siempre un poco, más en la tormenta).
+  float jm = jesus * (0.35 + 0.65 * uWave) * uMotion;
+  d.x += sin(iuv.y * 34.0 + uTime * 1.9) * 0.0035 * jm;
+  d.y += sin(iuv.x * 26.0 + uTime * 1.4) * 0.0015 * jm;
 
+  vec2 suv = clamp(iuv + d, 0.001, 0.999);
   vec3 cs = texture2D(uStorm, suv).rgb;
   vec3 cc = texture2D(uCalm, suv).rgb;
 
   // --- Disolución tormenta -> bonanza: frente de ruido que nace en Jesús ---
-  vec2 q = (uv - vec2(0.625, 0.36)) * asp;
+  // (el ruido solo se calcula mientras el frente avanza: ahorra batería)
+  vec2 q = (iuv - vec2(0.625, 0.36)) * asp;
   float dist = length(q);
-  float n = fbm(uv * asp * 4.0 + vec2(0.0, uTime * 0.02));
-  float front = mix(-0.25, 1.67, clamp(uCalmAmt, 0.0, 1.0));
-  float t = front - dist + (n - 0.5) * 0.44;
-  float m = smoothstep(0.0, 0.07, t);
-  float edge = smoothstep(0.0, 0.03, t) * (1.0 - smoothstep(0.03, 0.12, t));
+  float calmAmt = clamp(uCalmAmt, 0.0, 1.0);
+  float m = 0.0;
+  float edge = 0.0;
+  if (calmAmt >= 0.97) {
+    m = 1.0;
+  } else if (calmAmt > 0.002) {
+    float n = fbm(iuv * asp * 4.0 + vec2(0.0, uTime * 0.02));
+    float front = mix(-0.25, 1.67, calmAmt);
+    float t = front - dist + (n - 0.5) * 0.44;
+    m = smoothstep(0.0, 0.07, t);
+    edge = smoothstep(0.0, 0.03, t) * (1.0 - smoothstep(0.03, 0.12, t));
+  }
 
   vec3 col = mix(cs, cc, m);
   col += edge * vec3(1.0, 0.80, 0.42) * (0.38 + 0.14 * sin(uTime * 3.0));
-  float pulse = sin(3.14159 * clamp(uCalmAmt, 0.0, 1.0));
+  float pulse = sin(3.14159 * calmAmt);
   col += vec3(0.20, 0.13, 0.04) * pulse * exp(-dist * 1.4);
 
   // --- Rayos de luz que nacen del hueco entre las nubes ---
-  vec2 rq = (uv - vec2(0.47, 0.16)) * asp;
+  vec2 rq = (iuv - vec2(0.47, 0.16)) * asp;
   float ang = atan(rq.y, rq.x);
   float rl = length(rq);
-  float beam = 0.5 + 0.5 * sin(ang * 15.0 + fbm(vec2(ang * 3.0, uTime * 0.05)) * 3.0 + uTime * 0.18);
+  float wob = noise(vec2(ang * 3.0, uTime * 0.05)) + 0.5 * noise(vec2(ang * 6.0, uTime * 0.07 + 3.0));
+  float beam = 0.5 + 0.5 * sin(ang * 15.0 + wob * 2.0 + uTime * 0.18);
   beam = pow(beam, 4.0);
-  float rays = beam * exp(-rl * 1.7) * smoothstep(0.02, 0.20, rq.y);
+  float breathe = 0.88 + 0.12 * sin(uTime * 0.7 + ang * 3.0);
+  float rays = beam * breathe * exp(-rl * 1.7) * smoothstep(0.02, 0.20, rq.y);
   col += vec3(1.0, 0.84, 0.52) * rays * 0.28 * uRays;
 
+  // --- Motas de luz dorada que suben por los rayos (solo en la bonanza) ---
+  if (uRays > 0.05 && calmAmt > 0.3) {
+    float motes = 0.0;
+    for (int i = 0; i < 2; i++) {
+      float fi = float(i);
+      vec2 g = vec2(iuv.x * uAspect, iuv.y) * (15.0 + fi * 10.0);
+      g.y += uTime * (0.32 + 0.18 * fi);
+      g.x += sin(uTime * 0.4 + fi * 2.0 + floor(g.y) * 1.7) * 0.35;
+      vec2 id = floor(g);
+      vec2 f = fract(g) - 0.5;
+      float h = hash(id + fi * 17.0);
+      vec2 off = (vec2(hash(id + 3.1), hash(id + 7.7)) - 0.5) * 0.5;
+      float tw = 0.5 + 0.5 * sin(uTime * (1.5 + 2.0 * h) + h * 40.0);
+      motes += step(0.80, h) * smoothstep(0.10, 0.0, length(f - off)) * tw;
+    }
+    float zone = smoothstep(0.02, 0.30, rq.y) * exp(-rl * 1.2);
+    col += vec3(1.0, 0.86, 0.55) * motes * zone * uRays * smoothstep(0.3, 0.9, calmAmt) * 1.1;
+  }
+
   // --- Lluvia (solo donde sigue la tormenta) ---
-  float r = rainLayer(uv, 38.0, 3.2, 0.0) * 0.9
-          + rainLayer(uv, 60.0, 4.6, 13.0) * 0.6
-          + rainLayer(uv, 90.0, 6.0, 29.0) * 0.4;
-  col = mix(col, vec3(0.95, 0.93, 0.88), clamp(r, 0.0, 1.0) * 0.42 * uRain * (1.0 - m));
+  if (uRain > 0.01 && calmAmt < 0.97) {
+    float r = rainLayer(uv, 38.0, 3.2, 0.0) * 0.9
+            + rainLayer(uv, 60.0, 4.6, 13.0) * 0.6
+            + rainLayer(uv, 90.0, 6.0, 29.0) * 0.4;
+    col = mix(col, vec3(0.95, 0.93, 0.88), clamp(r, 0.0, 1.0) * 0.46 * uRain * (1.0 - m));
+  }
 
   // --- Relámpago ---
   col += vec3(0.85, 0.88, 1.0) * uFlash * 0.5 * (1.0 - m);
@@ -151,14 +236,16 @@ void main() {
   float alpha = ex * ey;
 
   // --- Revelado tipo portal: anillo dorado que se abre desde el centro ---
-  vec2 cq = (uv - vec2(0.5, 0.52)) * asp;
-  float cd = length(cq);
-  float n2 = fbm(uv * asp * 3.0 + 7.3);
-  float rt = mix(-0.35, 1.5, clamp(uReveal, 0.0, 1.0)) - cd + (n2 - 0.5) * 0.5;
-  float rm = smoothstep(0.0, 0.10, rt);
-  float redge = smoothstep(0.0, 0.04, rt) * (1.0 - smoothstep(0.04, 0.22, rt));
-  col += redge * vec3(1.0, 0.82, 0.45) * 0.5;
-  alpha *= clamp(rm + redge * 0.6, 0.0, 1.0);
+  if (uReveal < 0.995) {
+    vec2 cq = (uv - vec2(0.5, 0.52)) * asp;
+    float cd = length(cq);
+    float n2 = fbm(uv * asp * 3.0 + 7.3);
+    float rt = mix(-0.35, 1.5, clamp(uReveal, 0.0, 1.0)) - cd + (n2 - 0.5) * 0.5;
+    float rm = smoothstep(0.0, 0.10, rt);
+    float redge = smoothstep(0.0, 0.04, rt) * (1.0 - smoothstep(0.04, 0.22, rt));
+    col += redge * vec3(1.0, 0.82, 0.45) * 0.5;
+    alpha *= clamp(rm + redge * 0.6, 0.0, 1.0);
+  }
 
   gl_FragColor = vec4(col * alpha, alpha);
 }`;
@@ -168,15 +255,17 @@ void main() {
 const STAGE_TARGETS = {
   'storm-building': { calm: 0, rain: 0.45, wave: 0.55, rays: 0.12, ripple: 0 },
   'storm-peak': { calm: 0, rain: 1.0, wave: 1.0, rays: 0.15, ripple: 0 },
-  command: { calm: 1, rain: 0.0, wave: 0.2, rays: 1.0, ripple: 0.35 },
-  calm: { calm: 1, rain: 0.0, wave: 0.0, rays: 0.9, ripple: 0.8 },
+  command: { calm: 1, rain: 0.0, wave: 0.25, rays: 1.0, ripple: 0.35 },
+  // Turno 19: en la bonanza el mar respira con suavidad (antes wave=0 dejaba
+  // la lámina completamente inmóvil y parecía una foto).
+  calm: { calm: 1, rain: 0.0, wave: 0.14, rays: 0.9, ripple: 0.8 },
 };
 // Constantes de tiempo (segundos) del suavizado. La disolución es lenta a
 // propósito: "no es parar en seco sino un movimiento de paz" (Turno 11).
 const TAU = { calm: 4.5, rain: 2.2, wave: 2.6, rays: 2.4, ripple: 2.4 };
 const UNIFORMS = [
   'uStorm', 'uCalm', 'uTime', 'uAspect', 'uCalmAmt', 'uRain', 'uWave',
-  'uRays', 'uRipple', 'uFlash', 'uReveal',
+  'uRays', 'uRipple', 'uFlash', 'uReveal', 'uMotion',
 ];
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -201,12 +290,18 @@ export class IllustratedScene {
 
     this._cur = { calm: 0, rain: 0.45, wave: 0.55, rays: 0.12, ripple: 0 };
     this._lastElapsed = 0;
+    this._lastDrawT = -1;
     this._time = 0;
     this._flash = 0;
     this._reveal = 0;
     this._revealing = false;
     this._size = { w: 0, h: 0 };
     this._lost = false;
+    // Accesibilidad: con "reducir movimiento" activado en el sistema, el
+    // movimiento de cámara y de las olas baja a un tercio.
+    this._motion =
+      typeof window !== 'undefined' && window.matchMedia &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0.35 : 1;
 
     this._canvas = document.createElement('canvas');
     this._canvas.style.cssText = 'display:block;width:100%;height:100%;';
@@ -317,8 +412,16 @@ export class IllustratedScene {
     const h = this.container.clientHeight;
     if (!w || !h) return false;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const pw = Math.round(w * dpr);
-    const ph = Math.round(h * dpr);
+    let pw = Math.round(w * dpr);
+    let ph = Math.round(h * dpr);
+    // Tope de píxeles por fotograma (la lámina ampliada en horizontal es grande):
+    // protege la batería y la fluidez en teléfonos de gama media.
+    const MAX_PX = 1.0e6;
+    if (pw * ph > MAX_PX) {
+      const k = Math.sqrt(MAX_PX / (pw * ph));
+      pw = Math.round(pw * k);
+      ph = Math.round(ph * k);
+    }
     if (this._canvas.width !== pw || this._canvas.height !== ph) {
       this._canvas.width = pw;
       this._canvas.height = ph;
@@ -344,6 +447,7 @@ export class IllustratedScene {
     gl.uniform1f(u.uRipple, this._cur.ripple);
     gl.uniform1f(u.uFlash, this._flash);
     gl.uniform1f(u.uReveal, this._reveal);
+    gl.uniform1f(u.uMotion, this._motion);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
@@ -385,6 +489,12 @@ export class IllustratedScene {
       this._cur[k] += (target[k] - this._cur[k]) * (1 - Math.exp(-dt / TAU[k]));
     });
     this._flash = Math.max(0, this._flash - dt * 3.2);
+    // Tope de ~30 fotogramas/s: el movimiento es lento y así la lámina grande
+    // no calienta el teléfono ni gasta batería de más. Los cuadros intermedios
+    // no se dibujan (el estado y el suavizado sí avanzan en cada llamada).
+    const since = elapsedSeconds - this._lastDrawT;
+    if (since >= 0 && since < 0.028) return;
+    this._lastDrawT = elapsedSeconds;
     this._draw();
   }
 
