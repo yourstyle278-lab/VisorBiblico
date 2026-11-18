@@ -153,6 +153,50 @@
       .book-wrap .plate-play { width: 44px; height: 44px; }
       .book-folio { display: none; }
     }
+    /* ===== MODO CINE (Turno 19) =====
+       Horizontal: mientras se narra, la lámina ocupa toda la pantalla (alto completo),
+       con el versículo actual como subtítulo y los controles en una columna lateral:
+       nada tapa la imagen. El botón de las flechas alterna con el libro de dos páginas.
+       Vertical: no cambia nada (la lámina ya va arriba a todo el ancho). */
+    .cine-stage { display: contents; }
+    .cine-side { display: none; }
+    #btn-cine { display: none; }
+    .book-wrap[data-cine="on"] .ico-expand { display: none; }
+    .book-wrap[data-cine="off"] .ico-compress { display: none; }
+    @media (orientation: landscape) and (min-width: 640px) {
+      .book-wrap[data-mode="immersion"] #btn-cine { display: flex; }
+      .book-wrap[data-mode="immersion"][data-cine="on"] .cine-stage {
+        position: fixed; inset: 0; z-index: 40; display: grid;
+        grid-template-columns: minmax(0, 1fr) clamp(190px, 27vw, 300px);
+        grid-template-rows: minmax(0, 1fr) auto;
+        background: radial-gradient(120% 120% at 35% 40%, #1c1511 0%, #0a0807 72%);
+        padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+        overscroll-behavior: contain; touch-action: none;
+      }
+      .book-wrap[data-mode="immersion"][data-cine="on"] #visor-plate {
+        grid-column: 1; grid-row: 1 / span 2; margin: 0; min-width: 0; min-height: 0;
+        display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 6px 0 6px 10px;
+      }
+      .book-wrap[data-mode="immersion"][data-cine="on"] .plate-art {
+        flex: 0 0 auto; margin: 0 auto;
+        width: min(100%, calc((100vh - 40px) * 1.655));
+        width: min(100%, calc((100dvh - 40px) * 1.655));
+      }
+      .book-wrap[data-mode="immersion"][data-cine="on"] .plate-caption { color: #cdb27a; }
+      .book-wrap[data-mode="immersion"][data-cine="on"] .cine-side {
+        grid-column: 2; grid-row: 1; display: flex; flex-direction: column; justify-content: center;
+        min-height: 0; overflow-y: auto; padding: 14px 14px 6px 10px; touch-action: pan-y;
+      }
+      .cine-caption { margin: 0; font-family: 'EB Garamond', Georgia, 'Times New Roman', serif; font-size: clamp(0.95rem, 2.3vw, 1.15rem); line-height: 1.45; color: #f3e3bd; }
+      .cine-caption .verse-num { font-family: 'Plus Jakarta Sans', sans-serif; font-size: 0.6em; font-weight: 700; color: #e0b043; vertical-align: super; margin-right: 0.3em; }
+      .cine-caption .word-active { background: rgba(224,176,67,0.92) !important; color: #1d1307 !important; border-radius: 4px; padding: 0 2px; }
+      .book-wrap[data-mode="immersion"][data-cine="on"] .plate-controls { grid-column: 2; grid-row: 2; margin: 0; padding: 6px 14px 12px 10px; gap: 8px; }
+      .book-wrap[data-mode="immersion"][data-cine="on"] .plate-track { background: rgba(255,255,255,0.22); }
+      .book-wrap[data-mode="immersion"][data-cine="on"] .plate-row { gap: 2px; justify-content: space-between; }
+      .book-wrap[data-mode="immersion"][data-cine="on"] .plate-btn { width: 36px; height: 36px; color: #f0dcae; }
+      .book-wrap[data-mode="immersion"][data-cine="on"] .plate-btn:active { background: rgba(255,255,255,0.14); }
+      .book-wrap[data-mode="immersion"][data-cine="on"] .plate-play { width: 44px; height: 44px; }
+    }
   </style>
 </head>
 <body class="min-h-screen flex flex-col justify-between relative selection:bg-amber-500 selection:text-black">
@@ -224,10 +268,16 @@
 
           <section id="book-page-right" class="book-page" aria-label="Página derecha">
             <div id="page-right-body" class="book-body only-reading"></div>
+            <div id="cine-stage" class="cine-stage">
             <figure id="visor-plate" class="plate only-immersion">
               <div id="three-canvas-container" class="plate-art"></div>
               <figcaption class="plate-caption"><span id="scene-state-text">Escena 1: Tempestad Embravecida</span></figcaption>
             </figure>
+            <!-- Subtítulo del modo cine: el versículo que se narra, con la palabra resaltada.
+                 Solo se ve con la lámina en pantalla grande (horizontal). -->
+            <div class="cine-side only-immersion">
+              <p id="cine-caption" class="cine-caption"></p>
+            </div>
             <div class="plate-controls only-immersion">
               <div class="plate-track"><div id="timeline-progress" class="plate-fill"></div></div>
               <div class="plate-row">
@@ -240,10 +290,15 @@
                 <button id="btn-forward" class="plate-btn" aria-label="Versículo siguiente">
                   <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16 5h2v14h-2zM14.5 12l-9 7V5z"/></svg>
                 </button>
+                <button id="btn-cine" class="plate-btn" aria-label="Ver el libro con el texto" title="Ver el libro con el texto" aria-pressed="true">
+                  <svg class="ico-expand" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+                  <svg class="ico-compress" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg>
+                </button>
                 <button id="btn-close-visor" class="plate-btn" aria-label="Volver a leer el texto" title="Volver a leer el texto">
                   <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 5.5C4 4.7 4.7 4 5.5 4H11v15H5.5A1.5 1.5 0 0 1 4 17.5zM20 5.5c0-.8-.7-1.5-1.5-1.5H13v15h5.5a1.5 1.5 0 0 0 1.5-1.5z"/></svg>
                 </button>
               </div>
+            </div>
             </div>
             <div class="book-folio"></div>
           </section>
