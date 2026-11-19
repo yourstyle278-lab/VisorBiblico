@@ -28,11 +28,14 @@
 // TURNO 19 — MÁS MOVIMIENTO (con las mismas dos láminas, sin imágenes nuevas):
 //  7. Cámara: vaivén y giro leves (más en la tormenta), empuje hacia la
 //     escena al crecer la tensión y retirada al llegar la calma.
-//  8. Paralaje de papel recortado: cielo, barca y mar se desplazan distinto.
-//  9. Olas ~3x más amplias y barca que cabecea girando sobre su centro; nubes
-//     que se deslizan y "hierven"; la túnica respira con la brisa.
+//  8. (T19, retirado en T20) paralaje y barca que giraba por una máscara:
+//     deformaba a las figuras ("gusanitos").
+//  9. Olas ~3x más amplias, SOLO en el mar libre; nubes que se deslizan como
+//     una sola pieza.
 // 10. En la bonanza el mar sigue respirando (antes quedaba inmóvil), ondas
 //     más amplias y motas de luz dorada subiendo por los rayos.
+// TURNO 20 — FIGURAS RÍGIDAS: Jesús, los discípulos y la barca no se deforman
+// nunca; solo se mueven con la cámara (movimiento rígido de toda la lámina).
 // Ahorro: el ruido de la disolución y del portal solo se calcula mientras
 // están en curso; la lluvia solo mientras llueve.
 //
@@ -121,7 +124,6 @@ void main() {
 
   // --- Máscaras de región (según la composición de las dos láminas) ---
   float water = smoothstep(0.60, 0.72, iuv.y);
-  float boat = 1.0 - smoothstep(0.55, 1.0, length((iuv - vec2(0.52, 0.67)) / vec2(0.31, 0.17)));
   float jesus = 1.0 - smoothstep(0.4, 1.0, length((iuv - vec2(0.63, 0.52)) / vec2(0.10, 0.26)));
   float sky = 1.0 - smoothstep(0.24, 0.46, iuv.y);
   // La figura de Jesús (cabeza y torso) sube hasta la zona de nubes: no debe
@@ -130,38 +132,29 @@ void main() {
   sky *= 1.0 - 0.92 * fig;
 
   // --- Desplazamientos ---
+  // REGLA (Turno 20): lo que está pintado como objeto sólido -- Jesús, los
+  // discípulos y la barca -- NO se deforma nunca; solo se mueve con la cámara,
+  // que es un movimiento rígido de toda la lámina. Las deformaciones (olas,
+  // nubes) se aplican solo al agua y al cielo, fuera de la zona de la barca.
+  // (En el Turno 19 la barca giraba por una máscara elíptica y las figuras
+  // ondulaban con las olas: se veían como "gusanitos".)
   vec2 d = vec2(0.0);
   float W = uWave * uMotion;
-  // Paralaje de papel recortado: el cielo se desplaza menos que la cámara y el mar más.
-  d += cam * (0.30 * water - 0.55 * sky);
-  // Olas: franjas de papel que se deslizan y cabecean.
-  d.x += sin(iuv.y * 26.0 + uTime * 1.5) * 0.0065 * water * W;
-  d.y += sin(iuv.x * 13.0 - uTime * 1.7 + iuv.y * 5.0) * 0.0085 * water * W;
-  d.y += sin(iuv.x * 31.0 + uTime * 2.3) * 0.0030 * water * W;
-  // Barca: cabeceo (giro sobre su centro), subida y bajada, y vaivén.
-  vec2 bp = (iuv - vec2(0.52, 0.70)) * asp;
-  float pitch = (sin(uTime * 1.05) * 0.030 + sin(uTime * 0.47 + 1.3) * 0.012) * W;
-  d += vec2(-bp.y / uAspect, bp.x) * pitch * boat;
-  d.y += sin(uTime * 1.15 + iuv.x * 4.0) * 0.0090 * boat * W;
-  d.x += sin(uTime * 0.9) * 0.0045 * boat * W;
-  // Nubes: se deslizan y "hierven" despacio (más en la tormenta).
-  if (sky > 0.001) {
-    float sm = uMotion * (0.35 + 0.65 * tension);
-    vec2 cn = vec2(iuv.x * 2.2 + uTime * 0.05, iuv.y * 2.6);
-    d.x += (noise(cn + vec2(0.0, uTime * 0.07)) - 0.5) * 0.026 * sky * sm;
-    d.y += (noise(cn * 1.7 + vec2(5.2 - uTime * 0.06, 1.3)) - 0.5) * 0.016 * sky * sm;
-    d.x += sin(uTime * 0.11) * 0.010 * sky * uMotion;
-  }
-  // Ondas concéntricas desde la barca en la bonanza.
+  float hull = 1.0 - smoothstep(0.78, 1.10, length((iuv - vec2(0.52, 0.64)) / vec2(0.32, 0.21)));
+  float sea = water * (1.0 - hull);
+  // Olas: franjas de papel que se deslizan y cabecean (solo mar libre).
+  d.x += sin(iuv.y * 26.0 + uTime * 1.5) * 0.0065 * sea * W;
+  d.y += sin(iuv.x * 13.0 - uTime * 1.7 + iuv.y * 5.0) * 0.0085 * sea * W;
+  d.y += sin(iuv.x * 31.0 + uTime * 2.3) * 0.0030 * sea * W;
+  // Nubes: se deslizan despacio como una sola pieza, sin deformarse.
+  d.x += sin(uTime * 0.11) * 0.008 * sky * uMotion;
+  d.y += sin(uTime * 0.17 + 1.0) * 0.003 * sky * uMotion * (0.5 + 0.5 * tension);
+  // Ondas concéntricas en la bonanza (solo mar libre).
   vec2 rp = (iuv - vec2(0.52, 0.80)) * asp * vec2(1.0, 2.2);
   float rd = length(rp);
-  float rz = water * uRipple * smoothstep(1.0, 0.05, rd) * uMotion;
+  float rz = sea * uRipple * smoothstep(1.0, 0.05, rd) * uMotion;
   d.y += sin(rd * 48.0 - uTime * 1.3) * 0.0055 * rz;
   d.x += cos(rd * 40.0 - uTime * 1.1) * 0.0025 * rz;
-  // Túnica de Jesús: la brisa (siempre un poco, más en la tormenta).
-  float jm = jesus * (0.35 + 0.65 * uWave) * uMotion;
-  d.x += sin(iuv.y * 34.0 + uTime * 1.9) * 0.0035 * jm;
-  d.y += sin(iuv.x * 26.0 + uTime * 1.4) * 0.0015 * jm;
 
   vec2 suv = clamp(iuv + d, 0.001, 0.999);
   vec3 cs = texture2D(uStorm, suv).rgb;
