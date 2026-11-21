@@ -141,6 +141,22 @@
 //   lado.
 
 
+// CAMBIOS TURNO 21 (secuencia de láminas, reanudar por palabra, fin con fundido):
+// - La escena (IllustratedScene) ahora recibe cue(versículo, avance 0..1) al
+//   empezar cada versículo y en cada palabra narrada; ella elige la lámina que
+//   toca (9 en Marcos 4:35-41) y la transición. snapToStage queda solo para la
+//   escena anterior (si cue no existe se usa como antes).
+// - STAGE_OVERRIDE: el versículo 35 (y el 36) usan la etapa "dusk" (anochecer
+//   tranquilo) en el audio y el rótulo, en vez de la tormenta.
+// - Reanudar por palabra: pause() guarda la última palabra narrada y play()
+//   vuelve a empezar unas palabras antes (RESUME_WORDS_BACK), no desde el
+//   inicio del versículo. Requiere el VoiceEngine nuevo (speakSequence con
+//   startChar); con el viejo, el tercer argumento se ignora y todo sigue como antes.
+// - Al terminar la narración el ambiente se apaga con un fundido (fadeOut del
+//   AudioEngine nuevo) y recién entonces se pausa; antes se cortaba en seco.
+// - Cada llamada a métodos nuevos de otros archivos está protegida (typeof ===
+//   'function'): los archivos se pueden subir en cualquier orden.
+
 import { AmbientAudioEngine } from '../audio/AudioEngine.js';
 import { VoiceEngine } from '../audio/VoiceEngine.js';
 import { IllustratedScene } from '../scene/IllustratedScene.js';
@@ -152,6 +168,16 @@ import { SCRIPTURE_PERICOPE, SCRIPTURE_ATTRIBUTION } from '../data/scripture.js'
 const PASSAGE_ID = 'mk-4-35-41';
 const PLAY_PATH = 'M8 5v14l11-7z';
 const PAUSE_PATH = 'M6 5h4v14H6zM14 5h4v14h-4z';
+
+// Turno 21: etapa de AUDIO y rótulo que se usa en lugar de la que trae
+// scripture.js cuando conviene (la lámina del versículo 35 es un anochecer
+// tranquilo, no una tormenta). Clave = número de versículo.
+const STAGE_OVERRIDE = { 35: 'dusk', 36: 'dusk' };
+// Cuántas palabras se retrocede al reanudar tras una pausa, para que se oiga
+// un poco de contexto antes de seguir.
+const RESUME_WORDS_BACK = 2;
+// Duración (s) del fundido del ambiente al terminar la narración.
+const END_FADE_SECONDS = 2.8;
 
 
 export class AppController {
@@ -183,6 +209,11 @@ export class AppController {
     // distinguir avance natural de un salto que necesita corte duro en
     // la escena (ver cabecera, Turno 12). -1 = todavía no narró nada.
     this._lastNarratedIndex = -1;
+    // Turno 21: reanudar por palabra tras una pausa y fundido al terminar.
+    this._boundary = { index: -1, char: 0 }; // última palabra narrada (real o estimada)
+    this._resume = null; // { index, char } calculado al pausar
+    this._startChar = { index: -1, char: 0 }; // desde qué carácter arrancó el versículo actual
+    this._endTimer = null;
 
     this.bookEl = document.getElementById('book-wrap');
     this.leftBodyEl = document.getElementById('page-left-body');
@@ -278,10 +309,15 @@ export class AppController {
     // toque pudo ser en la página de abajo y el diseño acaba de cambiar).
     this.bookEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
-    this.currentStage = 'storm-building';
+    this.currentStage = this._stageOf(0);
     this.currentVerseIndex = -1;
     this._lastNarratedIndex = -1;
-    this.scene3D.snapToStage(this.currentStage);
+    this._resume = null;
+    this._boundary = { index: -1, char: 0 };
+    this._startChar = { index: -1, char: 0 };
+    // Turno 21: la escena arranca en la primera lámina de la secuencia (corte seco).
+    if (typeof this.scene3D.cue === 'function') this.scene3D.cue(SCRIPTURE_PERICOPE[0].verse, 0, true);
+    else this.scene3D.snapToStage(this.currentStage);
     this.scene3D.resetReveal();
     this.scene3D.reveal(1700);
     this._updateStageLabel(this.currentStage);
@@ -304,6 +340,9 @@ export class AppController {
     this.pause();
     this.currentVerseIndex = -1;
     this._lastNarratedIndex = -1;
+    this._resume = null;
+    this._startChar = { index: -1, char: 0 };
+    if (typeof this.ambient.cancelFade === 'function') this.ambient.cancelFade();
     this.scene3D.resetReveal();
     this._enterReadingLayout();
     this._restartAnimation(this.leftBodyEl, 'materialize');
@@ -522,7 +561,8 @@ export class AppController {
 
   _wireVoiceEvents() {
     this.voice.onVerseStart = (index) => {
-      const stage = SCRIPTURE_PERICOPE[index].stage;
+      const v = SCRIPTURE_PERICOPE[index];
+      const stage = this._stageOf(index);
       // ¿Es "el mismo versículo de nuevo" (se repite por la pausa) o "el
       // siguiente natural" de la historia? Si no es ninguno de los dos,
       // es un salto (reinicio tras el final, o botón anterior/siguiente
@@ -530,13 +570,20 @@ export class AppController {
       // transición — ver Turno 12 arriba y en IllustratedScene.js.
       const isContinuation =
         index === this._lastNarratedIndex || index === this._lastNarratedIndex + 1;
-      if (!isContinuation) this.scene3D.snapToStage(stage);
+      // Si el versículo arrancó a mitad (reanudación por palabra), la secuencia
+      // de láminas debe empezar en ese punto y no al principio del versículo.
+      const startChar = this._startChar.index === index ? this._startChar.char : 0;
+      const progress = v.text ? startChar / v.text.length : 0;
+      if (typeof this.scene3D.cue === 'function') this.scene3D.cue(v.verse, progress, !isContinuation);
+      else if (!isContinuation) this.scene3D.snapToStage(stage);
       this._lastNarratedIndex = index;
+      this._boundary = { index, char: startChar };
 
       this.currentVerseIndex = index;
       const enteringStormPeak = stage === 'storm-peak' && this.currentStage !== 'storm-peak';
       this.currentStage = stage;
-      this.ambient.setStage(stage);
+      // La etapa 'dusk' solo la entiende el AudioEngine nuevo; con el viejo se usa la de antes.
+      this.ambient.setStage(stage === 'dusk' && !this.ambient.supportsDusk ? 'storm-building' : stage);
       this._applyDucking(stage);
       this._updateStageLabel(stage);
       this._updateProgress();
@@ -551,7 +598,14 @@ export class AppController {
     };
 
     this.voice.onWordBoundary = (index, charIndex) => {
+      this._boundary = { index, char: charIndex };
       this._highlightAtCharIndex(index, charIndex);
+      // Turno 21: la secuencia de láminas sigue a la narración (en qué punto
+      // del versículo va), con avance real o estimado.
+      const v = SCRIPTURE_PERICOPE[index];
+      if (typeof this.scene3D.cue === 'function' && v && v.text) {
+        this.scene3D.cue(v.verse, charIndex / v.text.length);
+      }
     };
 
     this.voice.onSequenceEnd = () => {
@@ -563,17 +617,60 @@ export class AppController {
         this._manualStop = false;
         return;
       }
-      this.pause();
       this.currentVerseIndex = -1;
+      this._resume = null;
+      // Turno 21: al terminar, el ambiente se apaga con un fundido (antes se
+      // cortaba en seco) y recién entonces se pausa todo.
+      if (typeof this.ambient.fadeOut === 'function') {
+        this.ambient.fadeOut(END_FADE_SECONDS);
+        clearTimeout(this._endTimer);
+        this._endTimer = setTimeout(() => {
+          this._endTimer = null;
+          this.pause();
+        }, (END_FADE_SECONDS + 0.2) * 1000);
+      } else {
+        this.pause();
+      }
     };
+  }
+
+  // Etapa de audio/rótulo de un versículo (con los cambios de STAGE_OVERRIDE).
+  _stageOf(index) {
+    const v = SCRIPTURE_PERICOPE[index];
+    return (v && STAGE_OVERRIDE[v.verse]) || (v && v.stage) || 'storm-peak';
+  }
+
+  // Posición (en caracteres) donde empieza la palabra que está n palabras antes de pos.
+  _wordsBack(text, pos, n) {
+    let i = Math.min(Math.max(pos, 0), text.length);
+    for (let w = 0; w < n; w += 1) {
+      while (i > 0 && /\s/.test(text[i - 1])) i -= 1;
+      while (i > 0 && !/\s/.test(text[i - 1])) i -= 1;
+    }
+    return i;
+  }
+
+  // Dónde reanudar tras una pausa: el versículo actual, unas palabras antes de
+  // la última narrada. Si todavía no avanzó nada desde que se reanudó, se queda
+  // donde estaba (para que pausar y reanudar sin avanzar no retroceda más).
+  _computeResume() {
+    const i = this.currentVerseIndex;
+    if (i < 0) return { index: 0, char: 0 };
+    const b = this._boundary;
+    if (!b || b.index !== i || !(b.char > 0)) return { index: i, char: 0 };
+    if (this._startChar.index === i && b.char <= this._startChar.char) {
+      return { index: i, char: this._startChar.char };
+    }
+    return { index: i, char: this._wordsBack(SCRIPTURE_PERICOPE[i].text, b.char, RESUME_WORDS_BACK) };
   }
 
   _updateStageLabel(stage) {
     const labels = {
-      'storm-building': 'Escena 1: Tempestad Embravecida',
-      'storm-peak': 'Escena 1: Tempestad Embravecida',
-      command: 'Escena 2: Teofanía y Mandato Divino',
-      calm: 'Escena 3: La Gran Bonanza',
+      dusk: 'Escena 1: La Travesía',
+      'storm-building': 'Escena 2: Tempestad Embravecida',
+      'storm-peak': 'Escena 2: Tempestad Embravecida',
+      command: 'Escena 3: Teofanía y Mandato Divino',
+      calm: 'Escena 4: La Gran Bonanza',
     };
     if (this.stageLabelEl) this.stageLabelEl.textContent = labels[stage] || '';
   }
@@ -647,7 +744,13 @@ export class AppController {
     // Si estaba en pausa, el ambiente (que pause() suspendió) también debe
     // reanudarse — antes la voz hablaba sobre un ambiente en silencio.
     if (!this.isPlaying) this.ambient.play();
-    this.voice.speakSequence(SCRIPTURE_PERICOPE, clamped);
+    // Turno 21: un salto corta cualquier fundido de fin en curso y arranca desde el inicio del versículo.
+    clearTimeout(this._endTimer);
+    this._endTimer = null;
+    if (typeof this.ambient.cancelFade === 'function') this.ambient.cancelFade();
+    this._resume = null;
+    this._startChar = { index: clamped, char: 0 };
+    this.voice.speakSequence(SCRIPTURE_PERICOPE, clamped, 0);
     this.isPlaying = true;
     this._setPlayIcon(true);
     if (!this.rafId) this._startAnimLoop();
@@ -669,7 +772,12 @@ export class AppController {
       // resume(), se vuelve a narrar desde el INICIO del versículo donde
       // se quedó — unos segundos de un solo versículo, no de todo.
       const resumeIndex = this.currentVerseIndex >= 0 ? this.currentVerseIndex : 0;
-      this.voice.speakSequence(SCRIPTURE_PERICOPE, resumeIndex);
+      // Turno 21: se reanuda desde la palabra donde se pausó (unas palabras
+      // antes), no desde el inicio del versículo.
+      const resumeChar = this._resume && this._resume.index === resumeIndex ? this._resume.char : 0;
+      this._resume = null;
+      this._startChar = { index: resumeIndex, char: resumeChar };
+      this.voice.speakSequence(SCRIPTURE_PERICOPE, resumeIndex, resumeChar);
     }
 
     this._startAnimLoop();
@@ -678,6 +786,10 @@ export class AppController {
   pause() {
     clearTimeout(this._introTimer); // si se pausa antes de que arranque la inmersión, no arrancar
     this._introTimer = null;
+    clearTimeout(this._endTimer);
+    this._endTimer = null;
+    // Turno 21: guardar dónde se quedó la narración, ANTES de cancelar la voz.
+    this._resume = this._computeResume();
     this.ambient.pause();
     // ✅ CONFIRMADO en el Turno 13 (ver VoiceEngine.js): stop() SÍ podía
     // disparar el "fin de secuencia" por error, porque cancel() dispara
