@@ -41,6 +41,18 @@
 // depende de ningún tiempo de espera ni de que AppController adivine
 // cuándo ignorar un evento (ver el otro lado de este arreglo, la
 // bandera _manualStop, en AppController.js).
+//
+// CAMBIO TURNO 21 (ruta: src/audio/VoiceEngine.js) — REANUDAR DESDE UNA
+// PALABRA: speakSequence(verses, startIndex, startChar) acepta un tercer
+// argumento opcional. Si startChar > 0, el PRIMER versículo se narra desde
+// ese carácter (el texto se corta ahí) y todos los avisos de palabra
+// (onWordBoundary, reales o estimados) suman ese desplazamiento, de modo que
+// AppController recibe siempre posiciones sobre el texto COMPLETO del
+// versículo, igual que antes. Los versículos siguientes se narran enteros.
+// Con startChar = 0 (o sin el argumento) el comportamiento es idéntico al
+// de antes. AppController lo usa para que, tras una pausa, la voz retome
+// unas palabras antes de donde se detuvo en vez de repetir todo el
+// versículo (la pausa nativa sigue sin usarse: está rota en Chrome/Android).
 
 export class VoiceEngine {
   constructor({ lang = 'es-ES', rate = 0.95 } = {}) {
@@ -57,6 +69,7 @@ export class VoiceEngine {
     this._queue = [];
     this._currentIndex = -1;
     this._currentUtterance = null; // Turno 13 — ver cabecera
+    this._startChar = 0; // Turno 21 — solo vale para el primer versículo de la secuencia
     this._fallbackTimer = null;
     this._estimatedTimers = [];
   }
@@ -77,11 +90,13 @@ export class VoiceEngine {
 
   // "verses" siempre es el arreglo COMPLETO de la perícopa; "startIndex"
   // es desde qué versículo empezar (no un .slice() — ver historial).
-  speakSequence(verses, startIndex = 0) {
+  // "startChar" (Turno 21, opcional): desde qué carácter del PRIMER versículo.
+  speakSequence(verses, startIndex = 0, startChar = 0) {
     if (!this.supported) return false;
     this.stop();
     this._queue = verses;
     this._currentIndex = startIndex - 1;
+    this._startChar = Math.max(0, Math.floor(startChar) || 0);
     this._speakNext();
     return true;
   }
@@ -93,7 +108,12 @@ export class VoiceEngine {
       return;
     }
     const index = this._currentIndex;
-    const verseText = this._queue[index].text;
+    const fullText = this._queue[index].text;
+    // Turno 21: reanudar desde una palabra. Solo el primer versículo; si el
+    // carácter cae fuera del texto, se narra entero.
+    const offset = this._startChar > 0 && this._startChar < fullText.length ? this._startChar : 0;
+    this._startChar = 0;
+    const verseText = offset ? fullText.slice(offset) : fullText;
     const utterance = new SpeechSynthesisUtterance(verseText);
     this._currentUtterance = utterance; // Turno 13 — para que stop() pueda silenciarla
     utterance.lang = this.lang;
@@ -105,7 +125,7 @@ export class VoiceEngine {
     this._clearEstimatedTimers();
     clearTimeout(this._fallbackTimer);
     this._fallbackTimer = setTimeout(() => {
-      if (!gotRealBoundary) this._runEstimatedHighlighting(index, verseText);
+      if (!gotRealBoundary) this._runEstimatedHighlighting(index, verseText, offset);
     }, 700);
 
     utterance.onstart = () => {
@@ -114,7 +134,7 @@ export class VoiceEngine {
     utterance.onboundary = (event) => {
       gotRealBoundary = true;
       this._clearEstimatedTimers();
-      if (this.onWordBoundary) this.onWordBoundary(index, event.charIndex);
+      if (this.onWordBoundary) this.onWordBoundary(index, event.charIndex + offset);
     };
     utterance.onend = () => {
       clearTimeout(this._fallbackTimer);
@@ -137,7 +157,9 @@ export class VoiceEngine {
   // caracteres/segundo a rate=1.0 es una estimación de habla normal, no
   // una medición exacta — se documenta como tal, no se presenta como
   // dato confirmado.
-  _runEstimatedHighlighting(index, text) {
+  // Turno 21: "text" puede ser solo la parte que se narra (reanudación) y
+  // "offset" es dónde empieza esa parte dentro del versículo completo.
+  _runEstimatedHighlighting(index, text, offset = 0) {
     const CHARS_PER_SECOND_AT_RATE_1 = 15;
     const words = [];
     let charPos = 0;
@@ -152,7 +174,7 @@ export class VoiceEngine {
     this._estimatedTimers = words.map((w) => {
       const wordShareMs = (w.length / text.length) * totalEstimatedMs;
       const timer = setTimeout(() => {
-        if (this.onWordBoundary) this.onWordBoundary(index, w.charIndex);
+        if (this.onWordBoundary) this.onWordBoundary(index, w.charIndex + offset);
       }, elapsedMs);
       elapsedMs += wordShareMs;
       return timer;
@@ -190,5 +212,6 @@ export class VoiceEngine {
     if (this.supported) this.synth.cancel();
     this._queue = [];
     this._currentIndex = -1;
+    this._startChar = 0;
   }
 }
